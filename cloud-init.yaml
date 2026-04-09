@@ -1,0 +1,88 @@
+#cloud-config
+write_files:
+  - path: /var/www/html/index.html
+    owner: www-data:www-data
+    permissions: '0644'
+    content: |
+      <!DOCTYPE html>
+      <html lang="fr">
+      <head>
+        <meta charset="UTF-8">
+        <title>Landing Zone - OVHcloud SBG5</title>
+        <style>
+          body {
+            font-family: sans-serif;
+            background: #0f1923;
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+          }
+          .card {
+            background: #1a2a3a;
+            border: 1px solid #00a8e0;
+            border-radius: 12px;
+            padding: 40px 60px;
+            text-align: center;
+            box-shadow: 0 0 30px rgba(0,168,224,0.2);
+          }
+          h1 { color: #00a8e0; margin-bottom: 8px; }
+          p  { color: #aaa; margin: 6px 0; }
+          .badge {
+            display: inline-block;
+            margin-top: 20px;
+            background: #00a8e0;
+            color: #000;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>🚀 Landing Zone IaC</h1>
+          <p>OVHcloud Public Cloud — Région <strong>SBG5</strong></p>
+          <p>Infrastructure déployée avec <strong>Terraform</strong></p>
+          <p>VM : <strong>landing-zone-demo-vm</strong></p>
+          <div class="badge">✅ Opérationnelle</div>
+        </div>
+      </body>
+      </html>
+
+  - path: /etc/nginx/sites-available/default
+    permissions: '0644'
+    content: |
+      server {
+          listen 80;
+          server_name _;
+          return 301 https://$host$request_uri;
+      }
+      server {
+          listen 443 ssl;
+          server_name _;
+          ssl_certificate     /etc/ssl/certs/nginx-selfsigned.crt;
+          ssl_certificate_key /etc/ssl/private/nginx-selfsigned.key;
+          ssl_protocols       TLSv1.2 TLSv1.3;
+          ssl_ciphers         HIGH:!aNULL:!MD5;
+          root /var/www/html;
+          index index.html;
+          location / {
+              try_files $uri $uri/ =404;
+          }
+      }
+
+runcmd:
+  - until apt-get update; do echo "Réseau pas encore disponible, retry..."; sleep 10; done
+  - apt-get install -y nginx openssl
+  - openssl req -x509 -nodes -days 365
+      -newkey rsa:2048
+      -keyout /etc/ssl/private/nginx-selfsigned.key
+      -out /etc/ssl/certs/nginx-selfsigned.crt
+      -subj "/C=FR/ST=Alsace/L=Strasbourg/O=Nantares/CN=landing-zone"
+  - ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default  # ← ajout
+  - systemctl enable nginx
+  - systemctl restart nginx

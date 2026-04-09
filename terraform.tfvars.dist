@@ -1,0 +1,12 @@
+ovh_application_key    = "XXXXXXXXXXXXXXXXXX"
+ovh_application_secret = "XXXXXXXXXXXXXXXXXX"
+ovh_consumer_key       = "XXXXXXXXXXXXXXXXXX"
+
+os_tenant_id   = "XXXXXXXXXXXXXXXXXX"
+os_tenant_name = "XXXXXXXXXXXXXXXXXX"
+os_username    = "user-XXXXXXXXXXXXXXXXXX"
+os_password    = "XXXXXXXXXXXXXXXXXX"
+os_region      = "XXX"
+
+admin_cidr     = "XXX.XXX.XXX.XXX/32"  # ta vraie IP publique
+ssh_public_key = "ssh-rsa XXXXXXXXXXXXXXXXXX [terraform-ovh]"
