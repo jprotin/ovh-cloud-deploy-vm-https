@@ -23,6 +23,8 @@ Infrastructure as Code modulaire pour déployer des environnements sur OVHcloud 
 │       ├── terraform.tfvars.dist # Template de variables
 │       └── cloud-init.yaml       # Provisionning de la VM
 │
+├── _init-project/
+│   └── setup.sh                  # Installation automatique des prérequis
 ├── infra.sh                      # CLI de gestion (deploy, destroy, ssh...)
 ├── destroy.sh                    # Script de destruction legacy
 ├── README.md
@@ -56,10 +58,30 @@ OVHcloud Public Cloud - Région SBG5
 ## Prérequis
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.5.0
+- [python-openstackclient](https://docs.openstack.org/python-openstackclient/) >= 6.0
+- Git >= 2.34
 - Un compte OVHcloud avec un projet Public Cloud
 - Clés API OVHcloud ([générer ici](https://www.ovh.com/auth/api/createToken))
 - Un utilisateur OpenStack créé dans le projet Public Cloud
 - Une clé SSH générée localement
+
+### Installation automatique
+
+Le script `_init-project/setup.sh` vérifie et installe tous les outils nécessaires, puis initialise Terraform si besoin :
+
+```bash
+./_init-project/setup.sh
+```
+
+Le script effectue dans l'ordre :
+1. Vérifie/installe **Terraform** (>= 1.5.0)
+2. Vérifie/installe **python-openstackclient** (>= 6.0)
+3. Vérifie/installe **Git** (>= 2.34)
+4. Vérifie la présence d'une **clé SSH**
+5. Vérifie la présence de **terraform.tfvars**
+6. Lance **terraform init** si nécessaire
+
+Si tout est déjà en place, le script affiche "Ton environnement est déjà prêt." et ne modifie rien.
 
 ## Utilisation rapide avec infra.sh
 

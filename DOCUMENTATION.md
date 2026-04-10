@@ -11,18 +11,19 @@
 ## Table des matières
 
 1. [Installation des outils](#1-installation-des-outils)
-2. [Introduction](#2-introduction)
-3. [Architecture](#3-architecture)
-4. [Structure du projet](#4-structure-du-projet)
-5. [Modules Terraform](#5-modules-terraform)
-6. [Prérequis et configuration](#6-prérequis-et-configuration)
-7. [Script infra.sh](#7-script-infrash)
-8. [Procédures de déploiement](#8-procédures-de-déploiement)
-9. [Destruction de l'infrastructure](#9-destruction-de-linfrastructure)
-10. [Provisionning cloud-init](#10-provisionning-cloud-init)
-11. [Dépannage](#11-dépannage)
-12. [Estimation des coûts](#12-estimation-des-coûts)
-13. [Évolutions possibles](#13-évolutions-possibles)
+2. [Script d'initialisation du projet](#2-script-dinitialisation-du-projet)
+3. [Introduction](#3-introduction)
+4. [Architecture](#4-architecture)
+5. [Structure du projet](#5-structure-du-projet)
+6. [Modules Terraform](#6-modules-terraform)
+7. [Prérequis et configuration](#7-prérequis-et-configuration)
+8. [Script infra.sh](#8-script-infrash)
+9. [Procédures de déploiement](#9-procédures-de-déploiement)
+10. [Destruction de l'infrastructure](#10-destruction-de-linfrastructure)
+11. [Provisionning cloud-init](#11-provisionning-cloud-init)
+12. [Dépannage](#12-dépannage)
+13. [Estimation des coûts](#13-estimation-des-coûts)
+14. [Évolutions possibles](#14-évolutions-possibles)
 
 ---
 
@@ -126,7 +127,69 @@ openstack catalog list | grep neutron
 
 ---
 
-## 2. Introduction
+## 2. Script d'initialisation du projet
+
+Le script `_init-project/setup.sh` automatise l'installation et la vérification de tous les prérequis nécessaires pour travailler sur le projet. Il peut être lancé à tout moment pour s'assurer que l'environnement de travail est prêt.
+
+### 2.1 Utilisation
+
+```bash
+./_init-project/setup.sh
+```
+
+### 2.2 Ce que le script vérifie et installe
+
+| Étape | Outil | Version min | Action si absent/obsolète |
+|---|---|---|---|
+| 1 | Terraform | >= 1.5.0 | Installation via le dépôt HashiCorp |
+| 2 | python-openstackclient | >= 6.0.0 | Installation via `apt` |
+| 3 | Git | >= 2.34.0 | Installation via `apt` |
+| 4 | Clé SSH | — | Affiche les instructions de génération |
+| 5 | terraform.tfvars | — | Affiche les instructions de création |
+| 6 | terraform init | — | Lance `terraform init` dans l'environnement |
+
+### 2.3 Comportement
+
+- **Tout est prêt** : le script affiche "Ton environnement est déjà prêt." et ne modifie rien
+- **Action(s) nécessaire(s)** : le script installe/met à jour les outils manquants et affiche le nombre d'actions effectuées
+- Le script ne gère pas les credentials (terraform.tfvars, openrc.sh) — ces fichiers doivent être configurés manuellement
+
+### 2.4 Exemple de sortie (environnement déjà prêt)
+
+```
+========================================
+  Setup environnement de travail
+  OVHcloud Landing Zone IaC
+========================================
+
+[INFO]    Vérification de Terraform (>= 1.5.0)...
+[OK]      Terraform 1.14.8
+
+[INFO]    Vérification du client OpenStack (>= 6.0.0)...
+[OK]      python-openstackclient 6.6.0
+
+[INFO]    Vérification de Git (>= 2.34.0)...
+[OK]      Git 2.43.0
+
+[INFO]    Vérification de la clé SSH...
+[OK]      Clé SSH RSA présente
+
+[INFO]    Vérification de terraform.tfvars...
+[OK]      terraform.tfvars présent
+
+[INFO]    Vérification de l'initialisation Terraform...
+[OK]      Terraform déjà initialisé
+
+----------------------------------------
+
+  Ton environnement est déjà prêt.
+
+----------------------------------------
+```
+
+---
+
+## 3. Introduction
 
 Ce document décrit l'architecture et les procédures de déploiement d'une landing zone sur OVHcloud Public Cloud via Terraform (Infrastructure as Code). L'objectif est de disposer d'un environnement cloud reproductible, versionné et entièrement automatisé.
 
@@ -145,7 +208,7 @@ Ce document décrit l'architecture et les procédures de déploiement d'une land
 
 ---
 
-## 3. Architecture
+## 4. Architecture
 
 ### Vue d'ensemble
 
@@ -201,7 +264,7 @@ Ton compte OVHcloud
 
 ---
 
-## 4. Structure du projet
+## 5. Structure du projet
 
 Le projet suit une architecture modulaire mono-repo avec séparation entre modules réutilisables et environnements.
 
@@ -234,6 +297,8 @@ Le projet suit une architecture modulaire mono-repo avec séparation entre modul
 │       ├── terraform.tfvars.dist     # Template de variables
 │       └── cloud-init.yaml           # Provisionning VM
 │
+├── _init-project/
+│   └── setup.sh                      # Installation automatique des prérequis
 ├── infra.sh                          # CLI de gestion unifiée
 ├── destroy.sh                        # Script de destruction legacy
 ├── README.md                         # Documentation rapide
@@ -403,9 +468,9 @@ openrc.sh
 
 ---
 
-## 5. Modules Terraform
+## 6. Modules Terraform
 
-### 5.1 Module `network`
+### 6.1 Module `network`
 
 Le module réseau crée l'ensemble de l'infrastructure réseau nécessaire à un environnement OVHcloud.
 
@@ -443,7 +508,7 @@ Le module réseau crée l'ensemble de l'infrastructure réseau nécessaire à un
 | `keypair_name` | Nom de la keypair SSH |
 | `router_id` | ID du routeur |
 
-### 5.2 Module `compute`
+### 6.2 Module `compute`
 
 Le module compute déploie une VM générique avec port réseau et IP flottante.
 
@@ -487,7 +552,7 @@ Le module compute déploie une VM générique avec port réseau et IP flottante.
 | `private_ip` | IP privée |
 | `public_ip` | IP publique flottante |
 
-### 5.3 Modules futurs
+### 6.3 Modules futurs
 
 | Module | Statut | Description |
 |---|---|---|
@@ -498,9 +563,9 @@ Ces modules seront implémentés selon les besoins. La structure est prête à l
 
 ---
 
-## 6. Prérequis et configuration
+## 7. Prérequis et configuration
 
-### 6.1 Clés API OVHcloud
+### 7.1 Clés API OVHcloud
 
 Se rendre sur https://www.ovh.com/auth/api/createToken et créer un token avec les droits :
 
@@ -511,7 +576,7 @@ Se rendre sur https://www.ovh.com/auth/api/createToken et créer un token avec l
 
 Le token génère trois valeurs : `application_key`, `application_secret`, `consumer_key`.
 
-### 6.2 Utilisateur OpenStack
+### 7.2 Utilisateur OpenStack
 
 Dans l'espace client OVHcloud : **Public Cloud → Project Management → Users & Roles**
 
@@ -522,7 +587,7 @@ Dans l'espace client OVHcloud : **Public Cloud → Project Management → Users 
 
 > **Point critique** : OVHcloud expose les services réseau (Neutron) sous l'identifiant `SBG5` dans le catalog OpenStack et non `SBG`. Cette distinction est critique pour que Terraform trouve les bons endpoints API.
 
-### 6.3 Endpoints API OVHcloud SBG5
+### 7.3 Endpoints API OVHcloud SBG5
 
 | Service | Endpoint public |
 |---|---|
@@ -532,7 +597,7 @@ Dans l'espace client OVHcloud : **Public Cloud → Project Management → Users 
 | glance (images) | `https://image.compute.sbg5.cloud.ovh.net/` |
 | swift (object) | `https://storage.sbg.cloud.ovh.net/` |
 
-### 6.4 Fichier terraform.tfvars
+### 7.4 Fichier terraform.tfvars
 
 ```hcl
 # OVH API
@@ -557,11 +622,11 @@ ssh_public_key = "ssh-rsa AAAA... user@host"
 
 ---
 
-## 7. Script infra.sh
+## 8. Script infra.sh
 
 Le script `infra.sh` à la racine du repo fournit une CLI unifiée pour toutes les opérations d'infrastructure. Il remplace les appels manuels à `terraform` et `destroy.sh`.
 
-### 7.1 Commandes disponibles
+### 8.1 Commandes disponibles
 
 | Commande | Options | Description |
 |---|---|---|
@@ -575,7 +640,7 @@ Le script `infra.sh` à la racine du repo fournit une CLI unifiée pour toutes l
 | `envs` | — | Liste les environnements disponibles |
 | `help` | — | Affiche l'aide |
 
-### 7.2 Options globales
+### 8.2 Options globales
 
 | Option | Description | Défaut |
 |---|---|---|
@@ -584,7 +649,7 @@ Le script `infra.sh` à la racine du repo fournit une CLI unifiée pour toutes l
 | `-a`, `--auto-approve` | Applique sans confirmation (deploy/destroy) | désactivé |
 | `-h`, `--help` | Affiche l'aide | — |
 
-### 7.3 Exemples d'utilisation
+### 8.3 Exemples d'utilisation
 
 ```bash
 # Workflow complet de déploiement
@@ -611,7 +676,7 @@ Le script `infra.sh` à la racine du repo fournit une CLI unifiée pour toutes l
 ./infra.sh ssh -e mon-autre-env -u admin
 ```
 
-### 7.4 Fonctionnement interne
+### 8.4 Fonctionnement interne
 
 - **Auto-init** : la commande `deploy` lance automatiquement `terraform init` si le répertoire `.terraform` n'existe pas encore
 - **Détachement routeur** : la commande `destroy` détache automatiquement l'interface routeur du subnet avant le `terraform destroy` (nécessaire sur OVHcloud)
@@ -620,9 +685,9 @@ Le script `infra.sh` à la racine du repo fournit une CLI unifiée pour toutes l
 
 ---
 
-## 8. Procédures de déploiement
+## 9. Procédures de déploiement
 
-### 8.1 Premier déploiement
+### 9.1 Premier déploiement
 
 ```bash
 # Avec infra.sh (recommandé)
@@ -649,7 +714,7 @@ vm_public_ip  = "XX.XX.XX.XX"
 
 > Attendre 3 à 5 minutes pour que cloud-init termine l'installation de Nginx.
 
-### 8.2 Vérification post-déploiement
+### 9.2 Vérification post-déploiement
 
 ```bash
 # Connexion SSH
@@ -667,7 +732,7 @@ curl -I http://<IP>
 curl -k https://<IP>
 ```
 
-### 8.3 Vérification des ressources OVHcloud via CLI
+### 9.3 Vérification des ressources OVHcloud via CLI
 
 ```bash
 source openrc.sh
@@ -683,9 +748,9 @@ openstack port list             # Vérifie les ports réseau
 
 ---
 
-## 9. Destruction de l'infrastructure
+## 10. Destruction de l'infrastructure
 
-### 9.1 Pourquoi un traitement spécial ?
+### 10.1 Pourquoi un traitement spécial ?
 
 OVHcloud crée automatiquement des **interfaces routeur supplémentaires** (ports SNAT distribués) lors de l'attachement du routeur au subnet privé. Ces ports ne sont pas gérés par Terraform et bloquent la suppression du subnet et du routeur lors d'un `terraform destroy` standard, avec l'erreur :
 
@@ -694,7 +759,7 @@ Error: RouterInUse — Router still has ports (409)
 Error: timeout waiting for subnet to become DELETED
 ```
 
-### 9.2 Destruction avec infra.sh (recommandé)
+### 10.2 Destruction avec infra.sh (recommandé)
 
 La commande `destroy` gère automatiquement le détachement de l'interface routeur :
 
@@ -709,7 +774,7 @@ La commande `destroy` gère automatiquement le détachement de l'interface route
 ./infra.sh destroy -e sandbox-sbg5
 ```
 
-### 9.3 Destruction manuelle
+### 10.3 Destruction manuelle
 
 Si nécessaire, les étapes manuelles sont :
 
@@ -725,13 +790,13 @@ terraform destroy
 
 ---
 
-## 10. Provisionning cloud-init
+## 11. Provisionning cloud-init
 
-### 10.1 Fonctionnement
+### 11.1 Fonctionnement
 
 Le fichier `cloud-init.yaml` (dans `envs/sandbox-sbg5/`) est injecté dans la VM via le paramètre `user_data` du module `compute`. OVHcloud l'exécute automatiquement au premier boot.
 
-### 10.2 Séquence d'exécution
+### 11.2 Séquence d'exécution
 
 | Ordre | Action | Détail |
 |---|---|---|
@@ -742,7 +807,7 @@ Le fichier `cloud-init.yaml` (dans `envs/sandbox-sbg5/`) est injecté dans la VM
 | 5 | `ln -s` (symlink) | Active la config Nginx dans `sites-enabled` |
 | 6 | `systemctl restart` | Démarre Nginx avec la nouvelle config |
 
-### 10.3 Fichier cloud-init.yaml complet
+### 11.3 Fichier cloud-init.yaml complet
 
 ```yaml
 #cloud-config
@@ -844,7 +909,7 @@ runcmd:
 
 ---
 
-## 11. Dépannage
+## 12. Dépannage
 
 ### Erreurs Terraform
 
@@ -892,7 +957,7 @@ openstack port list
 
 ---
 
-## 12. Estimation des coûts
+## 13. Estimation des coûts
 
 La facturation OVHcloud Public Cloud est **à l'heure**, convertible en mensuel sur la base de 730h/mois.
 
@@ -906,7 +971,7 @@ La facturation OVHcloud Public Cloud est **à l'heure**, convertible en mensuel 
 
 ---
 
-## 13. Évolutions possibles
+## 14. Évolutions possibles
 
 | Évolution | Description | Complexité |
 |---|---|---|
