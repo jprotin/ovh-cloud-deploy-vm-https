@@ -25,6 +25,5 @@ variable "ssh_public_key" {
 }
 
 variable "admin_cidr" {
-  description = "Ton IP publique autorisée en SSH (ex: 90.x.x.x/32)"
-  # Trouve ton IP : curl ifconfig.me
+  description = "CIDR autorisé en SSH (ex: 90.x.x.x/32)"
 }

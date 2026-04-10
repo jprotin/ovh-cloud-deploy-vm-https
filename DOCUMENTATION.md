@@ -14,13 +14,15 @@
 2. [Introduction](#2-introduction)
 3. [Architecture](#3-architecture)
 4. [Structure du projet](#4-structure-du-projet)
-5. [Prérequis et configuration](#5-prérequis-et-configuration)
-6. [Procédures de déploiement](#6-procédures-de-déploiement)
-7. [Destruction de l'infrastructure](#7-destruction-de-linfrastructure)
-8. [Provisionning cloud-init](#8-provisionning-cloud-init)
-9. [Dépannage](#9-dépannage)
-10. [Estimation des coûts](#10-estimation-des-coûts)
-11. [Évolutions possibles](#11-évolutions-possibles)
+5. [Modules Terraform](#5-modules-terraform)
+6. [Prérequis et configuration](#6-prérequis-et-configuration)
+7. [Script infra.sh](#7-script-infrash)
+8. [Procédures de déploiement](#8-procédures-de-déploiement)
+9. [Destruction de l'infrastructure](#9-destruction-de-linfrastructure)
+10. [Provisionning cloud-init](#10-provisionning-cloud-init)
+11. [Dépannage](#11-dépannage)
+12. [Estimation des coûts](#12-estimation-des-coûts)
+13. [Évolutions possibles](#13-évolutions-possibles)
 
 ---
 
@@ -43,7 +45,7 @@ terraform -version
 
 ### 1.2 Client OpenStack (python-openstackclient)
 
-Le client OpenStack est nécessaire pour diagnostiquer les ressources, vérifier les endpoints API et exécuter le script `destroy.sh`.
+Le client OpenStack est nécessaire pour diagnostiquer les ressources, vérifier les endpoints API et exécuter la destruction propre via `infra.sh destroy`.
 
 ```bash
 # Installation via apt (méthode recommandée sur Debian/Ubuntu)
@@ -54,7 +56,7 @@ openstack --version
 # openstack 6.x.x
 ```
 
-> ⚠️ **Ne pas utiliser `pip install` directement** sur les distributions récentes (Ubuntu 22.04+, Debian 12+) car l'environnement Python est géré par le système (`PEP 668`). Utiliser `apt` ou un environnement virtuel.
+> Ne pas utiliser `pip install` directement sur les distributions récentes (Ubuntu 22.04+, Debian 12+) car l'environnement Python est géré par le système (`PEP 668`). Utiliser `apt` ou un environnement virtuel.
 
 Si tu préfères un environnement virtuel Python :
 
@@ -83,7 +85,7 @@ ssh-keygen -t rsa -b 4096 -C "terraform-ovh"
 cat ~/.ssh/id_rsa.pub
 ```
 
-> ⚠️ La fonction `file()` de Terraform ne résout pas le `~` (tilde). Utiliser le **contenu direct** de la clé dans la variable `ssh_public_key` du `terraform.tfvars` plutôt que le chemin.
+> La fonction `file()` de Terraform ne résout pas le `~` (tilde). Utiliser le **contenu direct** de la clé dans la variable `ssh_public_key` du `terraform.tfvars` plutôt que le chemin.
 
 ### 1.4 Git
 
@@ -143,20 +145,20 @@ Ce document décrit l'architecture et les procédures de déploiement d'une land
 
 ---
 
-## 2. Architecture
+## 3. Architecture
 
 ### Vue d'ensemble
 
 ```
 OVHcloud Public Cloud - Région SBG5
 │
-├── 🌐 Réseau
+├── Réseau
 │   ├── Ext-Net (581fad02)          [Réseau public OVHcloud - Read Only]
 │   ├── landing-zone-demo-network   [10.0.1.0/24 - Réseau privé]
 │   ├── landing-zone-demo-router    [Gateway vers Ext-Net, SNAT auto]
 │   └── IP flottante                [IP publique assignée dynamiquement]
 │
-├── 🔒 Sécurité
+├── Sécurité
 │   ├── landing-zone-demo-sg
 │   │   ├── SSH  (22)   ingress  admin_cidr/32
 │   │   ├── HTTP (80)   ingress  0.0.0.0/0  → redirect HTTPS
@@ -164,7 +166,7 @@ OVHcloud Public Cloud - Région SBG5
 │   │   └── ICMP        ingress  0.0.0.0/0
 │   └── landing-zone-demo-keypair   [Clé SSH RSA]
 │
-└── 💻 Compute
+└── Compute
     └── landing-zone-demo-vm
         ├── Flavor   : d2-2 (1 vCPU / 2 GB / 25 GB)
         ├── OS       : Ubuntu 24.04 LTS
@@ -199,19 +201,43 @@ Ton compte OVHcloud
 
 ---
 
-## 3. Structure du projet
+## 4. Structure du projet
+
+Le projet suit une architecture modulaire mono-repo avec séparation entre modules réutilisables et environnements.
 
 ```
-ovhcloud-landing-zone/
-├── versions.tf          # Contraintes de versions Terraform et providers
-├── providers.tf         # Configuration des providers OVH et OpenStack
-├── variables.tf         # Déclaration de toutes les variables
-├── terraform.tfvars     # Valeurs des variables (⚠️ non versionné en Git)
-├── main.tf              # Toutes les ressources OVHcloud/OpenStack
-├── outputs.tf           # IP publique, IP privée, commande SSH
-├── cloud-init.yaml      # Provisionning automatique de la VM au boot
-├── destroy.sh           # Script de destruction propre (détache routeur)
-└── .gitignore
+.
+├── modules/                          # Modules Terraform réutilisables
+│   ├── network/                      # Réseau, routeur, SG, keypair
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   └── versions.tf
+│   ├── compute/                      # VM, port, floating IP
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   └── versions.tf
+│   ├── mks/                          # Kubernetes managé (futur)
+│   │   └── .gitkeep
+│   └── dbaas/                        # Bases de données managées (futur)
+│       └── .gitkeep
+│
+├── envs/                             # Environnements de déploiement
+│   └── sandbox-sbg5/                 # Sandbox OVHcloud SBG5
+│       ├── main.tf                   # Assemblage des modules
+│       ├── variables.tf              # Variables d'entrée
+│       ├── outputs.tf                # Sorties (IP, SSH...)
+│       ├── providers.tf              # Config providers OVH + OpenStack
+│       ├── versions.tf               # Contraintes de versions
+│       ├── terraform.tfvars          # Valeurs (non versionné)
+│       ├── terraform.tfvars.dist     # Template de variables
+│       └── cloud-init.yaml           # Provisionning VM
+│
+├── infra.sh                          # CLI de gestion unifiée
+├── destroy.sh                        # Script de destruction legacy
+├── README.md                         # Documentation rapide
+└── DOCUMENTATION.md                  # Documentation technique complète
 ```
 
 ### Providers utilisés
@@ -221,7 +247,9 @@ ovhcloud-landing-zone/
 | `ovh/ovh` | `~> 0.46` | Gestion des ressources OVHcloud (API OVH) |
 | `openstack/openstack` | `~> 2.1` | Gestion des ressources compute/réseau (API OpenStack) |
 
-### `versions.tf`
+### Fichiers de l'environnement `sandbox-sbg5`
+
+#### `versions.tf`
 
 ```hcl
 terraform {
@@ -240,7 +268,7 @@ terraform {
 }
 ```
 
-### `providers.tf`
+#### `providers.tf`
 
 ```hcl
 provider "ovh" {
@@ -261,13 +289,15 @@ provider "openstack" {
 }
 ```
 
-### `variables.tf`
+#### `variables.tf`
 
 ```hcl
+# OVH API
 variable "ovh_application_key" {}
 variable "ovh_application_secret" {}
 variable "ovh_consumer_key" {}
 
+# OpenStack
 variable "os_auth_url" {
   default = "https://auth.cloud.ovh.net/v3"
 }
@@ -279,218 +309,88 @@ variable "os_region" {
   default = "SBG5"
 }
 
+# Projet
 variable "project_name" {
   default = "landing-zone-demo"
 }
-
-variable "admin_cidr" {
-  description = "Ton IP publique autorisée en SSH (ex: 90.x.x.x/32)"
-}
-
 variable "ssh_public_key" {
   description = "Contenu de la clé publique SSH"
 }
+variable "admin_cidr" {
+  description = "CIDR autorisé en SSH (ex: 90.x.x.x/32)"
+}
 ```
 
-### `main.tf` — Contenu complet
+#### `main.tf` — Assemblage des modules
 
 ```hcl
-# -------------------------------------------------------
-# Réseau privé
-# -------------------------------------------------------
-resource "openstack_networking_network_v2" "private_net" {
-  name           = "${var.project_name}-network"
-  admin_state_up = true
-  region         = var.os_region
-}
-
-resource "openstack_networking_subnet_v2" "private_subnet" {
-  name            = "${var.project_name}-subnet"
-  network_id      = openstack_networking_network_v2.private_net.id
-  cidr            = "10.0.1.0/24"
-  ip_version      = 4
-  dns_nameservers = ["213.186.33.99", "8.8.8.8"]
-  region          = var.os_region
-}
-
-# -------------------------------------------------------
-# Ext-Net (réseau public OVHcloud SBG5)
-# -------------------------------------------------------
+# Ext-Net (réseau externe OVHcloud)
 data "openstack_networking_network_v2" "ext_net" {
   network_id = "581fad02-158d-4dc6-81f0-c1ec2794bbec"
   region     = var.os_region
 }
 
-# -------------------------------------------------------
-# Routeur
-# -------------------------------------------------------
-resource "openstack_networking_router_v2" "router" {
-  name                = "${var.project_name}-router"
-  admin_state_up      = true
-  external_network_id = data.openstack_networking_network_v2.ext_net.id
-  region              = var.os_region
-  # enable_snat non spécifié : OVHcloud l'active automatiquement
+# Module réseau
+module "network" {
+  source = "../../modules/network"
+
+  project_name   = var.project_name
+  region         = var.os_region
+  subnet_cidr    = "10.0.1.0/24"
+  admin_cidr     = var.admin_cidr
+  ssh_public_key = var.ssh_public_key
+  ext_net_id     = data.openstack_networking_network_v2.ext_net.id
 }
 
-# -------------------------------------------------------
-# Security Group
-# -------------------------------------------------------
-resource "openstack_networking_secgroup_v2" "sg_base" {
-  name        = "${var.project_name}-sg"
-  description = "Security group de base - Landing Zone"
-  region      = var.os_region
-}
+# Module compute (VM)
+module "vm" {
+  source = "../../modules/compute"
 
-resource "openstack_networking_secgroup_rule_v2" "ssh_in" {
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "tcp"
-  port_range_min    = 22
-  port_range_max    = 22
-  remote_ip_prefix  = var.admin_cidr
-  security_group_id = openstack_networking_secgroup_v2.sg_base.id
-  region            = var.os_region
-}
-
-resource "openstack_networking_secgroup_rule_v2" "icmp_in" {
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "icmp"
-  remote_ip_prefix  = "0.0.0.0/0"
-  security_group_id = openstack_networking_secgroup_v2.sg_base.id
-  region            = var.os_region
-}
-
-resource "openstack_networking_secgroup_rule_v2" "http_in" {
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "tcp"
-  port_range_min    = 80
-  port_range_max    = 80
-  remote_ip_prefix  = "0.0.0.0/0"
-  security_group_id = openstack_networking_secgroup_v2.sg_base.id
-  region            = var.os_region
-}
-
-resource "openstack_networking_secgroup_rule_v2" "https_in" {
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "tcp"
-  port_range_min    = 443
-  port_range_max    = 443
-  remote_ip_prefix  = "0.0.0.0/0"
-  security_group_id = openstack_networking_secgroup_v2.sg_base.id
-  region            = var.os_region
-}
-
-# -------------------------------------------------------
-# Keypair SSH
-# -------------------------------------------------------
-resource "openstack_compute_keypair_v2" "keypair" {
-  name       = "${var.project_name}-keypair"
-  public_key = var.ssh_public_key
-  region     = var.os_region
-}
-
-# -------------------------------------------------------
-# Data sources : image et flavor
-# -------------------------------------------------------
-data "openstack_images_image_v2" "ubuntu" {
-  name        = "Ubuntu 24.04"
-  most_recent = true
-  region      = var.os_region
-}
-
-data "openstack_compute_flavor_v2" "flavor" {
-  name   = "d2-2"
-  region = var.os_region
-}
-
-# -------------------------------------------------------
-# IP flottante publique
-# -------------------------------------------------------
-resource "openstack_networking_floatingip_v2" "floating_ip" {
-  pool   = "Ext-Net"
-  region = var.os_region
-}
-
-# -------------------------------------------------------
-# Port réseau sur le réseau privé
-# -------------------------------------------------------
-resource "openstack_networking_port_v2" "vm_port" {
-  name               = "${var.project_name}-port"
-  network_id         = openstack_networking_network_v2.private_net.id
-  admin_state_up     = true
-  security_group_ids = [openstack_networking_secgroup_v2.sg_base.id]
-  region             = var.os_region
-
-  fixed_ip {
-    subnet_id = openstack_networking_subnet_v2.private_subnet.id
-  }
-}
-
-# -------------------------------------------------------
-# Instance VM
-# -------------------------------------------------------
-resource "openstack_compute_instance_v2" "vm" {
-  name      = "${var.project_name}-vm"
-  image_id  = data.openstack_images_image_v2.ubuntu.id
-  flavor_id = data.openstack_compute_flavor_v2.flavor.id
-  key_pair  = openstack_compute_keypair_v2.keypair.name
-  region    = var.os_region
-  user_data = file("cloud-init.yaml")
-
-  network {
-    port = openstack_networking_port_v2.vm_port.id
-  }
+  project_name = var.project_name
+  region       = var.os_region
+  network_id   = module.network.network_id
+  subnet_id    = module.network.subnet_id
+  secgroup_id  = module.network.secgroup_id
+  keypair_name = module.network.keypair_name
+  image_name   = "Ubuntu 24.04"
+  flavor_name  = "d2-2"
+  user_data    = file("${path.module}/cloud-init.yaml")
 
   metadata = {
     project     = var.project_name
     environment = "sandbox"
     managed_by  = "terraform"
   }
-}
 
-# -------------------------------------------------------
-# Association IP flottante <-> VM
-# -------------------------------------------------------
-resource "openstack_networking_floatingip_associate_v2" "fip_assoc" {
-  floating_ip = openstack_networking_floatingip_v2.floating_ip.address
-  port_id     = openstack_networking_port_v2.vm_port.id
-  region      = var.os_region
-
-  depends_on = [
-    openstack_networking_router_v2.router,
-    openstack_compute_instance_v2.vm
-  ]
+  depends_on = [module.network]
 }
 ```
 
-### `outputs.tf`
+#### `outputs.tf`
 
 ```hcl
 output "vm_name" {
   description = "Nom de la VM"
-  value       = openstack_compute_instance_v2.vm.name
+  value       = module.vm.vm_name
 }
 
 output "vm_private_ip" {
   description = "IP privée de la VM"
-  value       = openstack_networking_port_v2.vm_port.all_fixed_ips[0]
+  value       = module.vm.private_ip
 }
 
 output "vm_public_ip" {
   description = "IP publique flottante"
-  value       = openstack_networking_floatingip_v2.floating_ip.address
+  value       = module.vm.public_ip
 }
 
 output "ssh_command" {
   description = "Commande SSH pour se connecter"
-  value       = "ssh ubuntu@${openstack_networking_floatingip_v2.floating_ip.address}"
+  value       = "ssh ubuntu@${module.vm.public_ip}"
 }
 ```
 
-### `.gitignore`
+#### `.gitignore`
 
 ```
 terraform.tfvars
@@ -498,13 +398,109 @@ terraform.tfvars
 *.tfstate.backup
 .terraform/
 .terraform.lock.hcl
+openrc.sh
 ```
 
 ---
 
-## 4. Prérequis et configuration
+## 5. Modules Terraform
 
-### 4.1 Clés API OVHcloud
+### 5.1 Module `network`
+
+Le module réseau crée l'ensemble de l'infrastructure réseau nécessaire à un environnement OVHcloud.
+
+**Ressources créées :**
+
+| Ressource | Description |
+|---|---|
+| `openstack_networking_network_v2` | Réseau privé |
+| `openstack_networking_subnet_v2` | Subnet avec DNS |
+| `openstack_networking_router_v2` | Routeur vers Ext-Net |
+| `openstack_networking_router_interface_v2` | Interface routeur/subnet |
+| `openstack_networking_secgroup_v2` | Security group |
+| `openstack_networking_secgroup_rule_v2` | Règles SSH, HTTP, HTTPS, ICMP |
+| `openstack_compute_keypair_v2` | Keypair SSH |
+
+**Variables d'entrée :**
+
+| Variable | Type | Défaut | Description |
+|---|---|---|---|
+| `project_name` | `string` | — | Préfixe des ressources |
+| `region` | `string` | — | Région OpenStack |
+| `subnet_cidr` | `string` | `10.0.1.0/24` | CIDR du subnet privé |
+| `dns_nameservers` | `list(string)` | `["213.186.33.99", "8.8.8.8"]` | Serveurs DNS |
+| `ext_net_id` | `string` | — | ID du réseau externe (Ext-Net) |
+| `admin_cidr` | `string` | — | CIDR autorisé en SSH |
+| `ssh_public_key` | `string` | — | Contenu de la clé publique SSH |
+
+**Outputs :**
+
+| Output | Description |
+|---|---|
+| `network_id` | ID du réseau privé |
+| `subnet_id` | ID du subnet |
+| `secgroup_id` | ID du security group |
+| `keypair_name` | Nom de la keypair SSH |
+| `router_id` | ID du routeur |
+
+### 5.2 Module `compute`
+
+Le module compute déploie une VM générique avec port réseau et IP flottante.
+
+**Ressources créées :**
+
+| Ressource | Description |
+|---|---|
+| `openstack_networking_port_v2` | Port réseau sur le réseau privé |
+| `openstack_networking_floatingip_v2` | IP flottante publique |
+| `openstack_compute_instance_v2` | Instance VM |
+| `openstack_networking_floatingip_associate_v2` | Association IP flottante/port |
+
+**Data sources :**
+
+| Data source | Description |
+|---|---|
+| `openstack_images_image_v2` | Résolution de l'image OS par nom |
+| `openstack_compute_flavor_v2` | Résolution du flavor par nom |
+
+**Variables d'entrée :**
+
+| Variable | Type | Défaut | Description |
+|---|---|---|---|
+| `project_name` | `string` | — | Préfixe des ressources |
+| `region` | `string` | — | Région OpenStack |
+| `network_id` | `string` | — | ID du réseau privé |
+| `subnet_id` | `string` | — | ID du subnet |
+| `secgroup_id` | `string` | — | ID du security group |
+| `keypair_name` | `string` | — | Nom de la keypair SSH |
+| `image_name` | `string` | `Ubuntu 24.04` | Nom de l'image OS |
+| `flavor_name` | `string` | `d2-2` | Nom du flavor |
+| `user_data` | `string` | `null` | Contenu cloud-init |
+| `metadata` | `map(string)` | `{}` | Metadata de l'instance |
+
+**Outputs :**
+
+| Output | Description |
+|---|---|
+| `vm_name` | Nom de la VM |
+| `vm_id` | ID de la VM |
+| `private_ip` | IP privée |
+| `public_ip` | IP publique flottante |
+
+### 5.3 Modules futurs
+
+| Module | Statut | Description |
+|---|---|---|
+| `mks` | Placeholder | OVHcloud Managed Kubernetes Service |
+| `dbaas` | Placeholder | Bases de données managées OVHcloud |
+
+Ces modules seront implémentés selon les besoins. La structure est prête à les accueillir.
+
+---
+
+## 6. Prérequis et configuration
+
+### 6.1 Clés API OVHcloud
 
 Se rendre sur https://www.ovh.com/auth/api/createToken et créer un token avec les droits :
 
@@ -515,7 +511,7 @@ Se rendre sur https://www.ovh.com/auth/api/createToken et créer un token avec l
 
 Le token génère trois valeurs : `application_key`, `application_secret`, `consumer_key`.
 
-### 4.2 Utilisateur OpenStack
+### 6.2 Utilisateur OpenStack
 
 Dans l'espace client OVHcloud : **Public Cloud → Project Management → Users & Roles**
 
@@ -524,9 +520,9 @@ Dans l'espace client OVHcloud : **Public Cloud → Project Management → Users 
 3. Télécharger le fichier `openrc.sh` (région SBG)
 4. Modifier `OS_REGION_NAME=SBG` en `OS_REGION_NAME=SBG5` dans le fichier
 
-> ⚠️ **Point critique** : OVHcloud expose les services réseau (Neutron) sous l'identifiant `SBG5` dans le catalog OpenStack et non `SBG`. Cette distinction est critique pour que Terraform trouve les bons endpoints API.
+> **Point critique** : OVHcloud expose les services réseau (Neutron) sous l'identifiant `SBG5` dans le catalog OpenStack et non `SBG`. Cette distinction est critique pour que Terraform trouve les bons endpoints API.
 
-### 4.3 Endpoints API OVHcloud SBG5
+### 6.3 Endpoints API OVHcloud SBG5
 
 | Service | Endpoint public |
 |---|---|
@@ -536,7 +532,7 @@ Dans l'espace client OVHcloud : **Public Cloud → Project Management → Users 
 | glance (images) | `https://image.compute.sbg5.cloud.ovh.net/` |
 | swift (object) | `https://storage.sbg.cloud.ovh.net/` |
 
-### 4.4 Fichier terraform.tfvars
+### 6.4 Fichier terraform.tfvars
 
 ```hcl
 # OVH API
@@ -561,25 +557,88 @@ ssh_public_key = "ssh-rsa AAAA... user@host"
 
 ---
 
-## 5. Procédures de déploiement
+## 7. Script infra.sh
 
-### 5.1 Premier déploiement
+Le script `infra.sh` à la racine du repo fournit une CLI unifiée pour toutes les opérations d'infrastructure. Il remplace les appels manuels à `terraform` et `destroy.sh`.
+
+### 7.1 Commandes disponibles
+
+| Commande | Options | Description |
+|---|---|---|
+| `init` | `-e env` | Initialise Terraform (`terraform init`) |
+| `plan` | `-e env` | Prévisualise les changements (`terraform plan`) |
+| `deploy` | `-e env`, `-a` | Déploie l'infrastructure (`terraform apply`) |
+| `destroy` | `-e env`, `-a` | Détache le routeur OVH puis détruit (`terraform destroy`) |
+| `ssh` | `-e env`, `-u user` | Connexion SSH à la VM |
+| `output` | `-e env` | Affiche les outputs Terraform |
+| `status` | `-e env` | Affiche l'état des ressources |
+| `envs` | — | Liste les environnements disponibles |
+| `help` | — | Affiche l'aide |
+
+### 7.2 Options globales
+
+| Option | Description | Défaut |
+|---|---|---|
+| `-e`, `--env` | Environnement cible | `sandbox-sbg5` |
+| `-u`, `--user` | Utilisateur SSH | `ubuntu` |
+| `-a`, `--auto-approve` | Applique sans confirmation (deploy/destroy) | désactivé |
+| `-h`, `--help` | Affiche l'aide | — |
+
+### 7.3 Exemples d'utilisation
 
 ```bash
-# Initialisation des providers
+# Workflow complet de déploiement
+./infra.sh init
+./infra.sh plan
+./infra.sh deploy
+
+# Déploiement rapide sans confirmation
+./infra.sh deploy -a
+
+# Connexion SSH
+./infra.sh ssh
+./infra.sh ssh -u root
+
+# Vérifier l'état
+./infra.sh output
+./infra.sh status
+
+# Destruction propre
+./infra.sh destroy
+
+# Cibler un autre environnement
+./infra.sh deploy -e mon-autre-env
+./infra.sh ssh -e mon-autre-env -u admin
+```
+
+### 7.4 Fonctionnement interne
+
+- **Auto-init** : la commande `deploy` lance automatiquement `terraform init` si le répertoire `.terraform` n'existe pas encore
+- **Détachement routeur** : la commande `destroy` détache automatiquement l'interface routeur du subnet avant le `terraform destroy` (nécessaire sur OVHcloud)
+- **Détection d'environnement** : le script vérifie que l'environnement cible existe dans `envs/` et liste les environnements disponibles en cas d'erreur
+- **Résolution d'IP** : la commande `ssh` récupère automatiquement l'IP publique depuis les outputs Terraform
+
+---
+
+## 8. Procédures de déploiement
+
+### 8.1 Premier déploiement
+
+```bash
+# Avec infra.sh (recommandé)
+./infra.sh init
+./infra.sh plan
+./infra.sh deploy
+
+# Ou manuellement
+cd envs/sandbox-sbg5
 terraform init
-
-# Validation de la syntaxe
 terraform validate
-
-# Prévisualisation des ressources à créer
 terraform plan
-
-# Déploiement (confirmer avec 'yes')
 terraform apply
 ```
 
-Après l'apply, Terraform affiche les outputs :
+Après le deploy, les outputs sont affichés automatiquement :
 
 ```
 ssh_command   = "ssh ubuntu@XX.XX.XX.XX"
@@ -588,26 +647,27 @@ vm_private_ip = "10.0.1.X"
 vm_public_ip  = "XX.XX.XX.XX"
 ```
 
-> ⏳ Attendre 3 à 5 minutes pour que cloud-init termine l'installation de Nginx.
+> Attendre 3 à 5 minutes pour que cloud-init termine l'installation de Nginx.
 
-### 5.2 Vérification post-déploiement
+### 8.2 Vérification post-déploiement
 
 ```bash
-# Vérifier l'état du cloud-init
-ssh ubuntu@<IP> "sudo cloud-init status"
+# Connexion SSH
+./infra.sh ssh
+
+# Sur la VM :
+sudo cloud-init status
 # Résultat attendu : status: done
 
+# Depuis la machine locale :
 # Test HTTP (doit retourner 301 → HTTPS)
 curl -I http://<IP>
 
 # Test HTTPS (certificat auto-signé, -k ignore l'avertissement)
 curl -k https://<IP>
-
-# Test redirection complète HTTP → HTTPS
-curl -Lk http://<IP>
 ```
 
-### 5.3 Vérification des ressources OVHcloud via CLI
+### 8.3 Vérification des ressources OVHcloud via CLI
 
 ```bash
 source openrc.sh
@@ -623,9 +683,9 @@ openstack port list             # Vérifie les ports réseau
 
 ---
 
-## 6. Destruction de l'infrastructure
+## 9. Destruction de l'infrastructure
 
-### 6.1 Pourquoi un script dédié ?
+### 9.1 Pourquoi un traitement spécial ?
 
 OVHcloud crée automatiquement des **interfaces routeur supplémentaires** (ports SNAT distribués) lors de l'attachement du routeur au subnet privé. Ces ports ne sont pas gérés par Terraform et bloquent la suppression du subnet et du routeur lors d'un `terraform destroy` standard, avec l'erreur :
 
@@ -634,43 +694,44 @@ Error: RouterInUse — Router still has ports (409)
 Error: timeout waiting for subnet to become DELETED
 ```
 
-### 6.2 Script destroy.sh
+### 9.2 Destruction avec infra.sh (recommandé)
+
+La commande `destroy` gère automatiquement le détachement de l'interface routeur :
 
 ```bash
-#!/bin/bash
-set -e
+# Avec confirmation
+./infra.sh destroy
 
-echo "=== Nettoyage interface routeur ==="
-SUBNET_ID=$(openstack subnet list | grep landing-zone-demo | awk '{print $2}')
+# Sans confirmation (sandbox uniquement)
+./infra.sh destroy -a
 
-if [ -n "$SUBNET_ID" ]; then
-  openstack router remove subnet landing-zone-demo-router $SUBNET_ID && \
-  echo "Interface détachée : $SUBNET_ID" || \
-  echo "Aucune interface à détacher"
-fi
-
-echo "=== Terraform destroy ==="
-terraform destroy "$@"
+# Cibler un environnement
+./infra.sh destroy -e sandbox-sbg5
 ```
 
-```bash
-# Utilisation
-chmod +x destroy.sh
-./destroy.sh
+### 9.3 Destruction manuelle
 
-# Avec auto-approve (sandbox uniquement)
-./destroy.sh -auto-approve
+Si nécessaire, les étapes manuelles sont :
+
+```bash
+# 1. Détacher l'interface du routeur
+SUBNET_ID=$(openstack subnet list | grep landing-zone-demo | awk '{print $2}')
+openstack router remove subnet landing-zone-demo-router $SUBNET_ID
+
+# 2. Lancer terraform destroy
+cd envs/sandbox-sbg5
+terraform destroy
 ```
 
 ---
 
-## 7. Provisionning cloud-init
+## 10. Provisionning cloud-init
 
-### 7.1 Fonctionnement
+### 10.1 Fonctionnement
 
-Le fichier `cloud-init.yaml` est injecté dans la VM via le paramètre `user_data` de la ressource Terraform `openstack_compute_instance_v2`. OVHcloud l'exécute automatiquement au premier boot.
+Le fichier `cloud-init.yaml` (dans `envs/sandbox-sbg5/`) est injecté dans la VM via le paramètre `user_data` du module `compute`. OVHcloud l'exécute automatiquement au premier boot.
 
-### 7.2 Séquence d'exécution
+### 10.2 Séquence d'exécution
 
 | Ordre | Action | Détail |
 |---|---|---|
@@ -681,7 +742,7 @@ Le fichier `cloud-init.yaml` est injecté dans la VM via le paramètre `user_dat
 | 5 | `ln -s` (symlink) | Active la config Nginx dans `sites-enabled` |
 | 6 | `systemctl restart` | Démarre Nginx avec la nouvelle config |
 
-### 7.3 Fichier cloud-init.yaml complet
+### 10.3 Fichier cloud-init.yaml complet
 
 ```yaml
 #cloud-config
@@ -730,11 +791,11 @@ write_files:
       </head>
       <body>
         <div class="card">
-          <h1>🚀 Landing Zone IaC</h1>
+          <h1>Landing Zone IaC</h1>
           <p>OVHcloud Public Cloud — Région <strong>SBG5</strong></p>
           <p>Infrastructure déployée avec <strong>Terraform</strong></p>
           <p>VM : <strong>landing-zone-demo-vm</strong></p>
-          <div class="badge">✅ Opérationnelle</div>
+          <div class="badge">Opérationnelle</div>
         </div>
       </body>
       </html>
@@ -779,20 +840,20 @@ runcmd:
   - systemctl restart nginx
 ```
 
-> ⚠️ **Point critique** : Sur Ubuntu 24.04, le fichier de configuration Nginx doit être activé via un symlink de `sites-available` vers `sites-enabled`. Sans cette étape, Nginx démarre sans écouter sur les ports 80 et 443.
+> **Point critique** : Sur Ubuntu 24.04, le fichier de configuration Nginx doit être activé via un symlink de `sites-available` vers `sites-enabled`. Sans cette étape, Nginx démarre sans écouter sur les ports 80 et 443.
 
 ---
 
-## 8. Dépannage
+## 11. Dépannage
 
 ### Erreurs Terraform
 
 | Erreur | Cause | Solution |
 |---|---|---|
 | `No suitable endpoint for network service in SBG` | Mauvais nom de région | Utiliser `SBG5` dans `terraform.tfvars` |
-| `ExternalGatewayForFloatingIPNotFound` | Interface routeur non attachée | Lancer `destroy.sh` puis `terraform apply` |
-| `RouterInUse (409)` lors du destroy | Ports OVHcloud résiduels | Utiliser `destroy.sh` |
-| `SecurityGroupRuleExists (409)` | OVHcloud crée une règle egress auto | Supprimer la ressource `egress_all` du `main.tf` |
+| `ExternalGatewayForFloatingIPNotFound` | Interface routeur non attachée | `./infra.sh destroy` puis `./infra.sh deploy` |
+| `RouterInUse (409)` lors du destroy | Ports OVHcloud résiduels | Utiliser `./infra.sh destroy` |
+| `SecurityGroupRuleExists (409)` | OVHcloud crée une règle egress auto | Supprimer la ressource `egress_all` du module |
 | `failed to generate fingerprint` | Mauvaise lecture de la clé SSH | Utiliser `ssh_public_key` avec le contenu direct |
 | `PolicyNotAuthorized` sur `enable_snat` | Droit réservé aux admins OVHcloud | Supprimer `enable_snat` du routeur |
 
@@ -801,24 +862,28 @@ runcmd:
 | Symptôme | Cause | Solution |
 |---|---|---|
 | `curl: (7) Failed to connect port 443` | Nginx n'écoute pas | Vérifier le symlink `sites-enabled` |
-| `Unit nginx.service could not be found` | cloud-init a échoué | Installer Nginx manuellement et corriger le `cloud-init.yaml` |
-| `Temporary failure resolving archive.ubuntu.com` | Réseau pas disponible au boot | Le `until apt-get update` dans `runcmd` gère ce cas |
+| `Unit nginx.service could not be found` | cloud-init a échoué | Installer Nginx manuellement |
+| `Temporary failure resolving archive.ubuntu.com` | Réseau pas disponible au boot | Le `until apt-get update` gère ce cas |
 | `sites-enabled` vide | Symlink non créé | `sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default` |
 
 ### Commandes de diagnostic
 
 ```bash
+# Connexion rapide
+./infra.sh ssh
+
 # État du cloud-init
-ssh ubuntu@<IP> "sudo cloud-init status"
-ssh ubuntu@<IP> "sudo cat /var/log/cloud-init-output.log"
+sudo cloud-init status
+sudo cat /var/log/cloud-init-output.log
 
 # État de Nginx
-ssh ubuntu@<IP> "sudo systemctl status nginx"
-ssh ubuntu@<IP> "sudo nginx -t"
-ssh ubuntu@<IP> "sudo ss -tlnp | grep -E '80|443'"
-ssh ubuntu@<IP> "sudo ls -la /etc/nginx/sites-enabled/"
+sudo systemctl status nginx
+sudo nginx -t
+sudo ss -tlnp | grep -E '80|443'
+sudo ls -la /etc/nginx/sites-enabled/
 
-# État du routeur OVHcloud
+# État du routeur OVHcloud (depuis la machine locale)
+source openrc.sh
 openstack router show landing-zone-demo-router -f json | python3 -m json.tool
 
 # Ports résiduels
@@ -827,7 +892,7 @@ openstack port list
 
 ---
 
-## 9. Estimation des coûts
+## 12. Estimation des coûts
 
 La facturation OVHcloud Public Cloud est **à l'heure**, convertible en mensuel sur la base de 730h/mois.
 
@@ -837,21 +902,22 @@ La facturation OVHcloud Public Cloud est **à l'heure**, convertible en mensuel 
 | IP flottante publique | ~0,004 €/h | ~2,90 € HT |
 | **Total** | | **~5,10 € HT/mois** |
 
-> ⚠️ La VM est facturée même si elle est éteinte. Pour stopper la facturation, supprimer l'instance via `./destroy.sh`. Les tarifs sont susceptibles d'évoluer suite aux hausses annoncées par OVHcloud début 2026 (+9 à +11% sur le Public Cloud).
+> La VM est facturée même si elle est éteinte. Pour stopper la facturation, supprimer l'instance via `./infra.sh destroy`. Les tarifs sont susceptibles d'évoluer suite aux hausses annoncées par OVHcloud début 2026 (+9 à +11% sur le Public Cloud).
 
 ---
 
-## 10. Évolutions possibles
+## 13. Évolutions possibles
 
 | Évolution | Description | Complexité |
 |---|---|---|
 | **Backend S3 OVHcloud** | Stocker le tfstate dans un bucket S3 OVHcloud pour le travail en équipe | Faible |
-| **Terraform modules** | Modulariser le code réseau/compute pour réutilisation sur d'autres projets | Moyenne |
 | **Ansible** | Remplacer cloud-init par un provisionning Ansible plus avancé et idempotent | Moyenne |
 | **Multi-VM + Load Balancer** | Déployer plusieurs instances avec un Octavia LB en frontal | Élevée |
 | **DNS + Let's Encrypt** | Pointer un domaine vers la VM et générer un certificat SSL valide | Faible |
 | **Volumes block Cinder** | Ajouter un disque de données séparé attaché à la VM | Faible |
-| **Kubernetes (MKS)** | Migrer vers OVHcloud Managed Kubernetes Service | Élevée |
+| **Module MKS** | Implémenter le module Kubernetes managé OVHcloud (`modules/mks/`) | Élevée |
+| **Module DBaaS** | Implémenter le module bases de données managées (`modules/dbaas/`) | Moyenne |
+| **Nouveaux environnements** | Ajouter d'autres envs dans `envs/` (prod, staging, autre région...) | Faible |
 
 ---
 

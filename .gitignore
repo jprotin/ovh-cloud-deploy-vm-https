@@ -4,3 +4,5 @@ terraform.tfvars
 .terraform/
 .terraform.lock.hcl
 openrc.sh
+.claude
+.gitignore

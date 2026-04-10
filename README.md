@@ -1,45 +1,57 @@
-# 🚀 OVHcloud Public Cloud — Landing Zone IaC
+# OVHcloud Public Cloud — Landing Zone IaC
 
-Infrastructure as Code complète pour déployer une landing zone sur OVHcloud Public Cloud (région SBG5) avec Terraform.
+Infrastructure as Code modulaire pour déployer des environnements sur OVHcloud Public Cloud avec Terraform.
 
-## 📋 Table des matières
+## Structure du projet
 
-- [Architecture](#architecture)
-- [Prérequis](#prérequis)
-- [Structure du projet](#structure-du-projet)
-- [Configuration](#configuration)
-- [Déploiement](#déploiement)
-- [Destruction](#destruction)
-- [Accès à la VM](#accès-à-la-vm)
-- [Dépannage](#dépannage)
+```
+.
+├── modules/                      # Modules Terraform réutilisables
+│   ├── network/                  # Réseau privé, routeur, security groups, keypair
+│   ├── compute/                  # VM générique (instance, port, floating IP)
+│   ├── mks/                      # Kubernetes managé (futur)
+│   └── dbaas/                    # Bases de données managées (futur)
+│
+├── envs/                         # Environnements
+│   └── sandbox-sbg5/             # Sandbox OVHcloud SBG5
+│       ├── main.tf               # Assemblage des modules
+│       ├── variables.tf          # Variables d'entrée
+│       ├── outputs.tf            # Sorties
+│       ├── providers.tf          # Configuration des providers
+│       ├── versions.tf           # Contraintes de versions
+│       ├── terraform.tfvars      # Valeurs des variables (non versionné)
+│       ├── terraform.tfvars.dist # Template de variables
+│       └── cloud-init.yaml       # Provisionning de la VM
+│
+├── infra.sh                      # CLI de gestion (deploy, destroy, ssh...)
+├── destroy.sh                    # Script de destruction legacy
+├── README.md
+└── DOCUMENTATION.md
+```
 
----
-
-## Architecture
+## Architecture déployée (sandbox-sbg5)
 
 ```
 OVHcloud Public Cloud - Région SBG5
 │
-├── 🌐 Réseau
+├── Réseau
 │   ├── Réseau privé    : 10.0.1.0/24
 │   ├── Routeur         : gateway → Ext-Net (SNAT activé)
 │   └── IP flottante    : IP publique assignée dynamiquement
 │
-├── 🔒 Sécurité
+├── Sécurité
 │   └── Security Group
 │       ├── SSH   (22)  → IP admin uniquement
-│       ├── HTTP  (80)  → 0.0.0.0/0 (redirect HTTPS)
+│       ├── HTTP  (80)  → 0.0.0.0/0
 │       ├── HTTPS (443) → 0.0.0.0/0
 │       └── ICMP        → 0.0.0.0/0
 │
-└── 💻 Compute
+└── Compute
     └── VM Ubuntu 24.04
         ├── Flavor  : d2-2 (1 vCPU / 2 GB RAM / 25 GB)
         ├── Nginx   : HTTPS avec certificat auto-signé
         └── Provisionning : cloud-init automatique
 ```
-
----
 
 ## Prérequis
 
@@ -49,169 +61,105 @@ OVHcloud Public Cloud - Région SBG5
 - Un utilisateur OpenStack créé dans le projet Public Cloud
 - Une clé SSH générée localement
 
----
+## Utilisation rapide avec infra.sh
 
-## Structure du projet
+Le script `infra.sh` centralise toutes les opérations d'infrastructure.
 
-```
-ovhcloud-landing-zone/
-├── main.tf              # Ressources principales
-├── variables.tf         # Déclaration des variables
-├── terraform.tfvars     # Valeurs des variables (non versionné)
-├── outputs.tf           # Outputs (IP, commande SSH...)
-├── providers.tf         # Configuration des providers
-├── versions.tf          # Contraintes de versions
-├── cloud-init.yaml      # Provisionning automatique de la VM
-├── destroy.sh           # Script de destruction propre
-└── .gitignore
+```bash
+# Afficher l'aide
+./infra.sh help
+
+# Lister les environnements disponibles
+./infra.sh envs
 ```
 
----
+### Déploiement
+
+```bash
+# Initialiser Terraform
+./infra.sh init
+
+# Prévisualiser les changements
+./infra.sh plan
+
+# Déployer l'infrastructure
+./infra.sh deploy
+
+# Déployer sans confirmation
+./infra.sh deploy -a
+```
+
+### Accès SSH
+
+```bash
+# Connexion SSH (ubuntu par défaut)
+./infra.sh ssh
+
+# Connexion avec un autre utilisateur
+./infra.sh ssh -u root
+```
+
+### Destruction
+
+```bash
+# Détruire l'infrastructure (avec confirmation)
+./infra.sh destroy
+
+# Détruire sans confirmation
+./infra.sh destroy -a
+```
+
+### Autres commandes
+
+```bash
+# Afficher les outputs Terraform (IP, commande SSH...)
+./infra.sh output
+
+# Afficher l'état des ressources déployées
+./infra.sh status
+```
+
+### Cibler un autre environnement
+
+Toutes les commandes acceptent `-e <env>` pour cibler un environnement spécifique :
+
+```bash
+./infra.sh deploy -e sandbox-sbg5
+./infra.sh ssh -e sandbox-sbg5 -u root
+./infra.sh destroy -e sandbox-sbg5 -a
+```
 
 ## Configuration
 
-### 1. Clés API OVHcloud
-
-Rends-toi sur [https://www.ovh.com/auth/api/createToken](https://www.ovh.com/auth/api/createToken) et crée un token avec les droits :
-- `GET /cloud/*`
-- `POST /cloud/*`
-- `PUT /cloud/*`
-- `DELETE /cloud/*`
-
-### 2. Utilisateur OpenStack
-
-Dans l'espace client OVHcloud :
-1. **Public Cloud** → ton projet → **Project Management** → **Users & Roles**
-2. Crée un utilisateur avec le rôle **Administrator**
-3. Note le mot de passe affiché une seule fois
-4. Télécharge le fichier `openrc.sh` (région SBG)
-5. **Attention** : modifie `OS_REGION_NAME=SBG` en `OS_REGION_NAME=SBG5` dans le fichier
-
-### 3. Fichier terraform.tfvars
-
-Crée le fichier `terraform.tfvars` (jamais commité en Git) :
-
-```hcl
-# OVH API
-ovh_application_key    = "XXXXXXXXXXXX"
-ovh_application_secret = "XXXXXXXXXXXX"
-ovh_consumer_key       = "XXXXXXXXXXXX"
-
-# OpenStack
-os_tenant_id   = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-os_tenant_name = "xxxxxxxxxxxxxxxxx"
-os_username    = "user-xxxxxxxxxx"
-os_password    = "XXXXXXXXXXXX"
-os_region      = "SBG5"
-
-# Projet
-project_name = "landing-zone-demo"
-admin_cidr   = "XX.XX.XX.XX/32"   # Ton IP publique (curl ifconfig.me)
-
-# Clé SSH publique
-ssh_public_key = "ssh-rsa AAAA... user@host"
-```
-
-### 4. .gitignore
-
-```
-terraform.tfvars
-*.tfstate
-*.tfstate.backup
-.terraform/
-.terraform.lock.hcl
-```
-
----
-
-## Déploiement
+Copier et remplir le fichier de variables dans l'environnement cible :
 
 ```bash
-# Initialisation
-terraform init
-
-# Validation
-terraform validate
-
-# Prévisualisation
-terraform plan
-
-# Déploiement
-terraform apply
+cd envs/sandbox-sbg5
+cp terraform.tfvars.dist terraform.tfvars
+# Éditer terraform.tfvars avec vos valeurs
 ```
 
-> ⚠️ Attends 3-5 minutes après l'apply pour que le cloud-init termine l'installation de Nginx.
+> Attendre 3-5 minutes après le deploy pour que cloud-init termine l'installation de Nginx.
 
-### Vérification
+## Vérification post-déploiement
 
 ```bash
-# Test HTTP (doit rediriger vers HTTPS)
-curl -I http://<IP_FLOTTANTE>
+# IP publique
+./infra.sh output
 
 # Test HTTPS
-curl -k https://<IP_FLOTTANTE>
+curl -k https://$(cd envs/sandbox-sbg5 && terraform output -raw vm_public_ip)
 
-# Connexion SSH
-ssh ubuntu@<IP_FLOTTANTE>
-
-# Vérification cloud-init
-ssh ubuntu@<IP_FLOTTANTE> "sudo cloud-init status"
+# État du cloud-init
+./infra.sh ssh
+# puis sur la VM : sudo cloud-init status
 ```
-
----
-
-## Destruction
-
-> ⚠️ OVHcloud crée automatiquement une interface routeur supplémentaire qui doit être détachée avant le destroy.
-
-Utilise le script `destroy.sh` :
-
-```bash
-chmod +x destroy.sh
-./destroy.sh
-```
-
-Le script effectue dans l'ordre :
-1. Détache l'interface du routeur du subnet
-2. Lance `terraform destroy`
-
----
-
-## Accès à la VM
-
-Les outputs Terraform fournissent directement la commande SSH :
-
-```bash
-terraform output ssh_command
-# → ssh ubuntu@<IP>
-```
-
-L'utilisateur par défaut Ubuntu 24.04 sur OVHcloud est `ubuntu`.
-
----
 
 ## Dépannage
 
-### Erreur : `No suitable endpoint for network service in SBG region`
-→ La région dans `terraform.tfvars` doit être `SBG5` (et non `SBG`).
-
-### Erreur : `ExternalGatewayForFloatingIPNotFound`
-→ L'interface du routeur n'est pas attachée au subnet. Lance le `destroy.sh` puis `terraform apply`.
-
-### Erreur : `RouterInUse` lors du destroy
-→ Utilise le script `destroy.sh` qui détache d'abord l'interface manuellement.
-
-### Nginx ne répond pas après l'apply
-→ Le cloud-init est peut-être encore en cours. Vérifie avec :
-```bash
-ssh ubuntu@<IP> "sudo cloud-init status"
-```
-Si `status: done` mais Nginx ne répond pas, vérifie le symlink :
-```bash
-ssh ubuntu@<IP> "sudo ls /etc/nginx/sites-enabled/"
-# Si vide :
-ssh ubuntu@<IP> "sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default && sudo systemctl restart nginx"
-```
-
-### Erreur : `failed to generate fingerprint` sur la keypair
-→ Utilise la variable `ssh_public_key` avec le contenu direct de la clé (pas le chemin).
+| Erreur | Solution |
+|--------|----------|
+| `No suitable endpoint for network service in SBG region` | La région doit être `SBG5` (pas `SBG`) |
+| `ExternalGatewayForFloatingIPNotFound` | Lancer `./infra.sh destroy` puis `./infra.sh deploy` |
+| `RouterInUse` lors du destroy | `./infra.sh destroy` détache automatiquement l'interface routeur |
+| Nginx ne répond pas | Vérifier `sudo cloud-init status` via `./infra.sh ssh` |
