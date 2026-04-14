@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENVS_DIR="$SCRIPT_DIR/envs"
+EXAMPLES_DIR="$SCRIPT_DIR/examples"
 DEFAULT_ENV="sandbox-sbg5"
 
 # -------------------------------------------------------
@@ -18,9 +19,9 @@ NC='\033[0m'
 # -------------------------------------------------------
 # Fonctions utilitaires
 # -------------------------------------------------------
-info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+info() { echo -e "${CYAN}[INFO]${NC}  $*"; }
+ok() { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 env_dir() {
@@ -46,6 +47,13 @@ list_envs() {
   done
 }
 
+# Retourne un output Terraform -raw ou une chaîne vide
+tf_output_raw() {
+  local dir="$1"
+  local name="$2"
+  terraform -chdir="$dir" output -raw "$name" 2>/dev/null || echo ""
+}
+
 # -------------------------------------------------------
 # Help
 # -------------------------------------------------------
@@ -53,15 +61,22 @@ usage() {
   cat <<EOF
 ${BOLD}Usage:${NC} $(basename "$0") <commande> [options]
 
-${BOLD}Commandes :${NC}
-  init      [-e env]               Initialise Terraform (terraform init)
-  plan      [-e env]               Prévisualise les changements (terraform plan)
-  deploy    [-e env] [-a]          Déploie l'infrastructure (terraform apply)
-  destroy   [-e env] [-a]          Détruit l'infrastructure
-  ssh       [-e env] [-u user]     Connexion SSH à la VM
-  output    [-e env]               Affiche les outputs Terraform
-  status    [-e env]               Affiche l'état des ressources
+${BOLD}Commandes générales :${NC}
+  init           [-e env]          Initialise Terraform (terraform init)
+  plan           [-e env]          Prévisualise les changements
+  deploy         [-e env] [-a]     Déploie l'infrastructure
+  destroy        [-e env] [-a]     Détruit l'infrastructure
+  output         [-e env]          Affiche les outputs Terraform
+  status         [-e env]          Affiche l'état des ressources
   envs                             Liste les environnements disponibles
+
+${BOLD}Commandes VM :${NC}
+  ssh            [-e env] [-u user]   Connexion SSH à la VM
+
+${BOLD}Commandes MKS :${NC}
+  kubeconfig     [-e env]             Affiche la commande export KUBECONFIG
+  deploy-demo    [-e env]             Déploie la démo multi-AZ (examples/k8s-multi-az-demo/)
+  destroy-demo   [-e env]             Supprime la démo multi-AZ
 
 ${BOLD}Options :${NC}
   -e, --env ENV       Environnement cible (défaut: $DEFAULT_ENV)
@@ -70,12 +85,11 @@ ${BOLD}Options :${NC}
   -h, --help          Affiche cette aide
 
 ${BOLD}Exemples :${NC}
-  $(basename "$0") deploy                        # Déploie sandbox-sbg5
-  $(basename "$0") deploy -e sandbox-sbg5 -a     # Déploie sans confirmation
-  $(basename "$0") ssh                            # SSH vers sandbox-sbg5
-  $(basename "$0") ssh -e sandbox-sbg5 -u root    # SSH en root
-  $(basename "$0") destroy -e sandbox-sbg5        # Détruit avec confirmation
-  $(basename "$0") output -e sandbox-sbg5         # Affiche les outputs
+  $(basename "$0") deploy -e sandbox-sbg5          # Déploie la VM
+  $(basename "$0") deploy -e mks-sandbox-par       # Déploie le cluster MKS
+  $(basename "$0") kubeconfig -e mks-sandbox-par   # Exporte kubeconfig
+  $(basename "$0") deploy-demo -e mks-sandbox-par  # Déploie la démo multi-AZ
+  $(basename "$0") ssh -e sandbox-sbg5              # SSH vers la VM
 
 EOF
 }
@@ -133,23 +147,23 @@ cmd_destroy() {
   local dir
   dir="$(env_dir "$env")"
 
-  # Détacher l'interface routeur (spécifique OVHcloud)
-  info "Nettoyage de l'interface routeur..."
-  local project_name
-  project_name=$(terraform -chdir="$dir" output -raw vm_name 2>/dev/null | sed 's/-vm$//' || echo "")
-
-  if [ -n "$project_name" ]; then
+  # Détacher l'interface routeur (spécifique OVHcloud, uniquement si VM déployée)
+  local vm_name
+  vm_name=$(tf_output_raw "$dir" "vm_name")
+  if [ -n "$vm_name" ] && [ "$vm_name" != "null" ]; then
+    info "Nettoyage de l'interface routeur..."
+    local project_name="${vm_name%-vm}"
     local subnet_id
     subnet_id=$(openstack subnet list 2>/dev/null | grep "$project_name" | awk '{print $2}' || echo "")
     if [ -n "$subnet_id" ]; then
-      openstack router remove subnet "${project_name}-router" "$subnet_id" \
-        && ok "Interface routeur détachée" \
-        || warn "Aucune interface à détacher"
+      if openstack router remove subnet "${project_name}-router" "$subnet_id"; then
+        ok "Interface routeur détachée"
+      else
+        warn "Aucune interface à détacher"
+      fi
     else
       info "Aucun subnet à détacher"
     fi
-  else
-    warn "Impossible de déterminer le nom du projet, skip du nettoyage routeur"
   fi
 
   info "Destruction de l'environnement ${BOLD}$env${NC}"
@@ -172,10 +186,11 @@ cmd_ssh() {
   dir="$(env_dir "$env")"
 
   local ip
-  ip=$(terraform -chdir="$dir" output -raw vm_public_ip 2>/dev/null || echo "")
+  ip=$(tf_output_raw "$dir" "vm_public_ip")
 
-  if [ -z "$ip" ]; then
-    error "Impossible de récupérer l'IP publique. L'infrastructure est-elle déployée ?"
+  if [ -z "$ip" ] || [ "$ip" = "null" ]; then
+    error "Aucune VM déployée dans l'environnement '$env'."
+    error "Vérifie que 'enable_vm = true' (env flexibles) ou que l'env contient une VM."
     exit 1
   fi
 
@@ -208,11 +223,103 @@ cmd_status() {
   info "${BOLD}${total}${NC} ressource(s) dans le state"
 }
 
+cmd_kubeconfig() {
+  local env="$1"
+  check_env "$env"
+
+  local dir
+  dir="$(env_dir "$env")"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+
+  if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
+    error "Aucun cluster MKS déployé dans l'environnement '$env'."
+    error "Vérifie que 'enable_mks = true' (env flexibles) ou que l'env contient MKS."
+    exit 1
+  fi
+
+  local abs_path
+  abs_path=$(cd "$(dirname "$kubeconfig")" && pwd)/$(basename "$kubeconfig")
+
+  if [ ! -f "$abs_path" ]; then
+    error "Le fichier kubeconfig n'existe pas : $abs_path"
+    error "Déploie d'abord le cluster : ./infra.sh deploy -e $env"
+    exit 1
+  fi
+
+  info "Kubeconfig pour ${BOLD}$env${NC} :"
+  echo ""
+  echo "  ${BOLD}export KUBECONFIG=$abs_path${NC}"
+  echo ""
+  info "Ou en une ligne (à évaluer) :"
+  echo ""
+  echo "  ${BOLD}eval \$(./infra.sh kubeconfig -e $env | grep export)${NC}"
+  echo ""
+}
+
+cmd_deploy_demo() {
+  local env="$1"
+  check_env "$env"
+
+  local dir
+  dir="$(env_dir "$env")"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+
+  if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
+    error "Aucun cluster MKS déployé dans l'environnement '$env'."
+    exit 1
+  fi
+
+  local demo_dir="$EXAMPLES_DIR/k8s-multi-az-demo"
+  if [ ! -d "$demo_dir" ]; then
+    error "Répertoire de démo introuvable : $demo_dir"
+    exit 1
+  fi
+
+  info "Déploiement de la démo multi-AZ sur ${BOLD}$env${NC}"
+  KUBECONFIG="$kubeconfig" kubectl apply -f "$demo_dir/"
+
+  echo ""
+  info "Patiente 1-2 min que l'IP publique du LoadBalancer soit provisionnée, puis :"
+  echo ""
+  echo "  ${BOLD}KUBECONFIG=$kubeconfig kubectl get svc zone-demo${NC}"
+  echo ""
+  ok "Démo déployée"
+}
+
+cmd_destroy_demo() {
+  local env="$1"
+  check_env "$env"
+
+  local dir
+  dir="$(env_dir "$env")"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+
+  if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
+    error "Aucun cluster MKS déployé dans l'environnement '$env'."
+    exit 1
+  fi
+
+  local demo_dir="$EXAMPLES_DIR/k8s-multi-az-demo"
+
+  info "Suppression de la démo sur ${BOLD}$env${NC}"
+  KUBECONFIG="$kubeconfig" kubectl delete -f "$demo_dir/" --ignore-not-found
+  ok "Démo supprimée"
+}
+
 # -------------------------------------------------------
 # Parsing des arguments
 # -------------------------------------------------------
 COMMAND="${1:-}"
-[ -z "$COMMAND" ] && { usage; exit 0; }
+[ -z "$COMMAND" ] && {
+  usage
+  exit 0
+}
 shift
 
 ENV="$DEFAULT_ENV"
@@ -221,18 +328,27 @@ AUTO_APPROVE="false"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -e|--env)
-      ENV="$2"; shift 2 ;;
-    -u|--user)
-      USER_SSH="$2"; shift 2 ;;
-    -a|--auto-approve)
-      AUTO_APPROVE="true"; shift ;;
-    -h|--help)
-      usage; exit 0 ;;
+    -e | --env)
+      ENV="$2"
+      shift 2
+      ;;
+    -u | --user)
+      USER_SSH="$2"
+      shift 2
+      ;;
+    -a | --auto-approve)
+      AUTO_APPROVE="true"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
     *)
       error "Option inconnue : $1"
       usage
-      exit 1 ;;
+      exit 1
+      ;;
   esac
 done
 
@@ -240,18 +356,23 @@ done
 # Dispatch
 # -------------------------------------------------------
 case "$COMMAND" in
-  init)     cmd_init "$ENV" ;;
-  plan)     cmd_plan "$ENV" ;;
-  deploy)   cmd_deploy "$ENV" "$AUTO_APPROVE" ;;
-  destroy)  cmd_destroy "$ENV" "$AUTO_APPROVE" ;;
-  ssh)      cmd_ssh "$ENV" "$USER_SSH" ;;
-  output)   cmd_output "$ENV" ;;
-  status)   cmd_status "$ENV" ;;
-  envs)     list_envs ;;
-  -h|--help|help)
-            usage ;;
+  init) cmd_init "$ENV" ;;
+  plan) cmd_plan "$ENV" ;;
+  deploy) cmd_deploy "$ENV" "$AUTO_APPROVE" ;;
+  destroy) cmd_destroy "$ENV" "$AUTO_APPROVE" ;;
+  ssh) cmd_ssh "$ENV" "$USER_SSH" ;;
+  output) cmd_output "$ENV" ;;
+  status) cmd_status "$ENV" ;;
+  kubeconfig) cmd_kubeconfig "$ENV" ;;
+  deploy-demo) cmd_deploy_demo "$ENV" ;;
+  destroy-demo) cmd_destroy_demo "$ENV" ;;
+  envs) list_envs ;;
+  -h | --help | help)
+    usage
+    ;;
   *)
     error "Commande inconnue : $COMMAND"
     usage
-    exit 1 ;;
+    exit 1
+    ;;
 esac

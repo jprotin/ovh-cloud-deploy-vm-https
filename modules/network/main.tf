@@ -52,6 +52,7 @@ resource "openstack_networking_secgroup_rule_v2" "ssh_in" {
   region            = var.region
 }
 
+#tfsec:ignore:openstack-networking-no-public-ingress ICMP public accepté (ping, diagnostic réseau)
 resource "openstack_networking_secgroup_rule_v2" "icmp_in" {
   direction         = "ingress"
   ethertype         = "IPv4"
@@ -61,6 +62,7 @@ resource "openstack_networking_secgroup_rule_v2" "icmp_in" {
   region            = var.region
 }
 
+#tfsec:ignore:openstack-networking-no-public-ingress HTTP public (serveur web)
 resource "openstack_networking_secgroup_rule_v2" "http_in" {
   direction         = "ingress"
   ethertype         = "IPv4"
@@ -72,6 +74,7 @@ resource "openstack_networking_secgroup_rule_v2" "http_in" {
   region            = var.region
 }
 
+#tfsec:ignore:openstack-networking-no-public-ingress HTTPS public (serveur web)
 resource "openstack_networking_secgroup_rule_v2" "https_in" {
   direction         = "ingress"
   ethertype         = "IPv4"

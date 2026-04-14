@@ -11,6 +11,7 @@ ENV_DIR="$PROJECT_DIR/envs/sandbox-sbg5"
 MIN_TERRAFORM="1.5.0"
 MIN_OPENSTACK="6.0.0"
 MIN_GIT="2.34.0"
+MIN_KUBECTL="1.28.0"
 
 # -------------------------------------------------------
 # Couleurs
@@ -25,10 +26,10 @@ NC='\033[0m'
 # -------------------------------------------------------
 # Fonctions utilitaires
 # -------------------------------------------------------
-info()    { echo -e "${CYAN}[INFO]${NC}    $*"; }
-ok()      { echo -e "${GREEN}[OK]${NC}      $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}    $*"; }
-error()   { echo -e "${RED}[ERROR]${NC}   $*" >&2; }
+info() { echo -e "${CYAN}[INFO]${NC}    $*"; }
+ok() { echo -e "${GREEN}[OK]${NC}      $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}    $*"; }
+error() { echo -e "${RED}[ERROR]${NC}   $*" >&2; }
 install() { echo -e "${YELLOW}[INSTALL]${NC} $*"; }
 
 ACTIONS_DONE=0
@@ -42,17 +43,21 @@ version_gte() {
   local v1_major v1_minor v1_patch
   local v2_major v2_minor v2_patch
 
-  IFS='.' read -r v1_major v1_minor v1_patch <<< "$v1"
-  IFS='.' read -r v2_major v2_minor v2_patch <<< "$v2"
+  IFS='.' read -r v1_major v1_minor v1_patch <<<"$v1"
+  IFS='.' read -r v2_major v2_minor v2_patch <<<"$v2"
 
-  v1_major="${v1_major:-0}"; v1_minor="${v1_minor:-0}"; v1_patch="${v1_patch:-0}"
-  v2_major="${v2_major:-0}"; v2_minor="${v2_minor:-0}"; v2_patch="${v2_patch:-0}"
+  v1_major="${v1_major:-0}"
+  v1_minor="${v1_minor:-0}"
+  v1_patch="${v1_patch:-0}"
+  v2_major="${v2_major:-0}"
+  v2_minor="${v2_minor:-0}"
+  v2_patch="${v2_patch:-0}"
 
-  if (( v1_major > v2_major )); then return 0; fi
-  if (( v1_major < v2_major )); then return 1; fi
-  if (( v1_minor > v2_minor )); then return 0; fi
-  if (( v1_minor < v2_minor )); then return 1; fi
-  if (( v1_patch >= v2_patch )); then return 0; fi
+  if ((v1_major > v2_major)); then return 0; fi
+  if ((v1_major < v2_major)); then return 1; fi
+  if ((v1_minor > v2_minor)); then return 0; fi
+  if ((v1_minor < v2_minor)); then return 1; fi
+  if ((v1_patch >= v2_patch)); then return 0; fi
   return 1
 }
 
@@ -92,8 +97,8 @@ install_terraform() {
   if [ ! -f /usr/share/keyrings/hashicorp-archive-keyring.gpg ]; then
     info "Ajout du dépôt HashiCorp..."
     wget -qO- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
-      | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" |
+      sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
   fi
 
   sudo apt-get update -qq
@@ -176,6 +181,56 @@ check_git() {
 }
 
 # -------------------------------------------------------
+# Vérification : kubectl (optionnel — requis pour MKS)
+# -------------------------------------------------------
+check_kubectl() {
+  echo ""
+  info "Vérification de kubectl (>= $MIN_KUBECTL, requis pour MKS)..."
+
+  if ! command -v kubectl &>/dev/null; then
+    install "kubectl non trouvé, installation en cours..."
+    install_kubectl
+    ACTIONS_DONE=$((ACTIONS_DONE + 1))
+    return
+  fi
+
+  local current
+  current=$(extract_version "$(kubectl version --client 2>/dev/null | head -1)")
+
+  if [ -z "$current" ]; then
+    warn "Impossible de déterminer la version de kubectl, skip"
+    return
+  fi
+
+  if version_gte "$current" "$MIN_KUBECTL"; then
+    ok "kubectl $current"
+  else
+    warn "kubectl $current < $MIN_KUBECTL, mise à jour en cours..."
+    install_kubectl
+    ACTIONS_DONE=$((ACTIONS_DONE + 1))
+  fi
+}
+
+install_kubectl() {
+  # Installation via le dépôt officiel Kubernetes
+  if [ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]; then
+    info "Ajout du dépôt Kubernetes..."
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key |
+      sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /" |
+      sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
+  fi
+
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq kubectl
+
+  local new_version
+  new_version=$(extract_version "$(kubectl version --client 2>/dev/null | head -1)")
+  ok "kubectl $new_version installé"
+}
+
+# -------------------------------------------------------
 # Vérification : Clé SSH
 # -------------------------------------------------------
 check_ssh_key() {
@@ -248,6 +303,7 @@ echo -e "${BOLD}========================================${NC}"
 check_terraform
 check_openstack
 check_git
+check_kubectl
 check_ssh_key
 check_tfvars
 check_terraform_init

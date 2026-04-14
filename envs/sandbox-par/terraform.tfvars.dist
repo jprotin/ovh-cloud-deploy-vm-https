@@ -1,0 +1,46 @@
+# -------------------------------------------------------
+# OVH API (toujours requis)
+# -------------------------------------------------------
+ovh_application_key    = "XXXXXXXXXXXXXXXXXX"
+ovh_application_secret = "XXXXXXXXXXXXXXXXXX"
+ovh_consumer_key       = "XXXXXXXXXXXXXXXXXX"
+ovh_service_name       = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# -------------------------------------------------------
+# Feature flags : active/désactive les composants
+# -------------------------------------------------------
+enable_vm    = false   # VM Ubuntu
+enable_mks   = false   # Cluster Kubernetes managé
+enable_dbaas = false   # DBaaS (non implémenté)
+
+# -------------------------------------------------------
+# Projet
+# -------------------------------------------------------
+project_name = "sandbox-par"
+
+# -------------------------------------------------------
+# OpenStack (requis si enable_vm = true)
+# -------------------------------------------------------
+os_tenant_id   = ""
+os_tenant_name = ""
+os_username    = ""
+os_password    = ""
+os_region      = "GRA11"   # région Public Cloud classique (ex: GRA11, SBG5)
+
+# -------------------------------------------------------
+# VM (si enable_vm = true)
+# -------------------------------------------------------
+ssh_public_key = ""                  # ex: "ssh-rsa AAAA..."
+admin_cidr     = "XX.XX.XX.XX/32"    # ton IP publique
+vm_image_name  = "Ubuntu 24.04"
+vm_flavor      = "d2-2"
+
+# -------------------------------------------------------
+# MKS (si enable_mks = true)
+# -------------------------------------------------------
+mks_region             = "EU-WEST-PAR"
+mks_az_count           = 2           # 1, 2 ou 3
+mks_node_flavor        = "b2-7"
+mks_nodes_per_pool     = 1
+mks_api_allowed_cidrs  = []          # [] = ouvert, ["X.X.X.X/32"] = restreint
+# mks_version          = "1.32"      # null = latest stable MKS
