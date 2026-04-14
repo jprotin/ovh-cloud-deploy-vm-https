@@ -1,0 +1,86 @@
+# Script exécuté par l'init container pour générer la page HTML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zone-display-script
+  namespace: default
+data:
+  generate.sh: |
+    #!/bin/sh
+    set -eu
+
+    # Récupère la zone du node via l'API Kubernetes
+    ZONE=$(kubectl get node "$NODE_NAME" \
+      -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}' 2>/dev/null || echo "unknown")
+    REGION=$(kubectl get node "$NODE_NAME" \
+      -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/region}' 2>/dev/null || echo "unknown")
+
+    # Couleur selon la zone (dernière lettre de la zone)
+    case "${ZONE: -1}" in
+      a) COLOR="#3498db"; LABEL="ZONE A" ;;
+      b) COLOR="#2ecc71"; LABEL="ZONE B" ;;
+      c) COLOR="#e74c3c"; LABEL="ZONE C" ;;
+      *) COLOR="#95a5a6"; LABEL="UNKNOWN" ;;
+    esac
+
+    POD_NAME=${HOSTNAME}
+
+    cat > /html/index.html <<EOF
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+      <meta charset="UTF-8">
+      <title>MKS Multi-AZ Demo</title>
+      <style>
+        body {
+          font-family: -apple-system, sans-serif;
+          background: ${COLOR};
+          color: #fff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          margin: 0;
+        }
+        .card {
+          background: rgba(0,0,0,0.3);
+          padding: 40px 60px;
+          border-radius: 12px;
+          text-align: center;
+          backdrop-filter: blur(10px);
+        }
+        h1 { font-size: 3em; margin: 0 0 20px; }
+        .label {
+          display: inline-block;
+          background: #fff;
+          color: ${COLOR};
+          padding: 8px 20px;
+          border-radius: 30px;
+          font-weight: bold;
+          font-size: 1.2em;
+          margin-bottom: 20px;
+        }
+        p { margin: 8px 0; opacity: 0.9; }
+        code {
+          background: rgba(0,0,0,0.3);
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 0.9em;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="label">${LABEL}</div>
+        <h1>MKS Multi-AZ Demo</h1>
+        <p>Zone: <code>${ZONE}</code></p>
+        <p>Région: <code>${REGION}</code></p>
+        <p>Node: <code>${NODE_NAME}</code></p>
+        <p>Pod: <code>${POD_NAME}</code></p>
+        <p style="margin-top:20px;font-size:0.85em;opacity:0.7;">Rafraîchis la page pour voir la rotation du load balancing</p>
+      </div>
+    </body>
+    </html>
+    EOF
+
+    echo "HTML generated for zone=$ZONE node=$NODE_NAME"

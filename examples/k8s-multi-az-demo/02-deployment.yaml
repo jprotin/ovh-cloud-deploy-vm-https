@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zone-demo
+  namespace: default
+  labels:
+    app: zone-demo
+spec:
+  replicas: 6 # Ajuster selon az_count * 2 pour une bonne répartition
+  selector:
+    matchLabels:
+      app: zone-demo
+  template:
+    metadata:
+      labels:
+        app: zone-demo
+    spec:
+      serviceAccountName: node-reader
+
+      # Anti-affinité : force la répartition des pods sur des zones différentes
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: zone-demo
+
+      initContainers:
+        - name: fetch-zone
+          image: bitnami/kubectl:latest
+          command: ["/bin/sh", "/scripts/generate.sh"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: html
+              mountPath: /html
+            - name: script
+              mountPath: /scripts
+
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+      volumes:
+        - name: html
+          emptyDir: {}
+        - name: script
+          configMap:
+            name: zone-display-script
+            defaultMode: 0755

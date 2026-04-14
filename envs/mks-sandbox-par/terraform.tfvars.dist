@@ -1,0 +1,28 @@
+# OVH API
+ovh_application_key    = "XXXXXXXXXXXXXXXXXX"
+ovh_application_secret = "XXXXXXXXXXXXXXXXXX"
+ovh_consumer_key       = "XXXXXXXXXXXXXXXXXX"
+
+# Tenant OVHcloud Public Cloud (service_name)
+ovh_service_name = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# Projet
+project_name = "mks-sandbox-par"
+cluster_name = "mks-sandbox-par"
+
+# Région Paris 3AZ
+region = "EU-WEST-PAR"
+
+# Multi-AZ (1, 2 ou 3)
+az_count = 2
+
+# Node pool
+node_flavor    = "b2-7"
+nodes_per_pool = 1
+
+# API Kube : ouvert par défaut (vide = 0.0.0.0/0)
+# Pour restreindre, mettre ["XX.XX.XX.XX/32"]
+api_allowed_cidrs = []
+
+# Version Kubernetes (null = latest stable MKS)
+# kube_version = "1.32"
