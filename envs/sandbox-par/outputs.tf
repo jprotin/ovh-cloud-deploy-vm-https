@@ -74,8 +74,8 @@ output "total_nodes" {
 }
 
 output "kubeconfig_path" {
-  description = "Chemin local du kubeconfig (null si MKS désactivé)"
-  value       = var.enable_mks ? local_file.kubeconfig[0].filename : null
+  description = "Chemin absolu du kubeconfig local (null si MKS désactivé)"
+  value       = var.enable_mks ? abspath(local_file.kubeconfig[0].filename) : null
 }
 
 output "kubectl_command" {
