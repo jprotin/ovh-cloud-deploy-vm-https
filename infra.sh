@@ -54,6 +54,48 @@ tf_output_raw() {
   terraform -chdir="$dir" output -raw "$name" 2>/dev/null || echo ""
 }
 
+# Détecte la région cible d'un env (priorité : terraform.tfvars > nom de l'env)
+detect_region() {
+  local env="$1"
+  local tfvars
+  tfvars="$(env_dir "$env")/terraform.tfvars"
+  local region=""
+  if [ -f "$tfvars" ]; then
+    region=$(grep -E '^[[:space:]]*region[[:space:]]*=' "$tfvars" | head -1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')
+  fi
+  if [ -z "$region" ]; then
+    case "$env" in
+      *par*) region="EU-WEST-PAR" ;;
+      *sbg*) region="SBG5" ;;
+    esac
+  fi
+  echo "$region"
+}
+
+# Source le bon openrc en fonction de la région cible (warning + continue si absent)
+source_openrc() {
+  local env="$1"
+  local region openrc
+  region=$(detect_region "$env")
+  case "$region" in
+    *PAR*) openrc="$SCRIPT_DIR/openrc_PAR.sh" ;;
+    *SBG*) openrc="$SCRIPT_DIR/openrc_SBG.sh" ;;
+    *)
+      warn "Région inconnue pour env '$env' (region='$region') — pas de sourcing openrc"
+      return 0
+      ;;
+  esac
+  if [ ! -f "$openrc" ]; then
+    warn "Fichier $(basename "$openrc") absent — pas de sourcing (vérifie OS_* en env si besoin)"
+    return 0
+  fi
+  info "Sourcing $(basename "$openrc")"
+  set +u
+  # shellcheck source=/dev/null
+  . "$openrc"
+  set -u
+}
+
 # -------------------------------------------------------
 # Help
 # -------------------------------------------------------
@@ -61,35 +103,51 @@ usage() {
   cat <<EOF
 ${BOLD}Usage:${NC} $(basename "$0") <commande> [options]
 
-${BOLD}Commandes générales :${NC}
-  init           [-e env]          Initialise Terraform (terraform init)
-  plan           [-e env]          Prévisualise les changements
-  deploy         [-e env] [-a]     Déploie l'infrastructure
-  destroy        [-e env] [-a]     Détruit l'infrastructure
-  output         [-e env]          Affiche les outputs Terraform
-  status         [-e env]          Affiche l'état des ressources
-  envs                             Liste les environnements disponibles
+${BOLD}Commandes Terraform :${NC}
+  init           [-e env]              Initialise Terraform (terraform init)
+  plan           [-e env]              Prévisualise les changements
+  deploy         [-e env] [-a]         Déploie l'infrastructure
+  destroy        [-e env] [-a]         Détruit l'infrastructure
+  output         [-e env]              Affiche les outputs Terraform
+  status         [-e env]              Affiche l'état des ressources
+  envs                                 Liste les environnements disponibles
 
 ${BOLD}Commandes VM :${NC}
-  ssh            [-e env] [-u user]   Connexion SSH à la VM
+  ssh            [-e env] [-u user]    Connexion SSH à la VM
 
 ${BOLD}Commandes MKS :${NC}
-  kubeconfig     [-e env]             Affiche la commande export KUBECONFIG
-  deploy-demo    [-e env]             Déploie la démo multi-AZ (examples/k8s-multi-az-demo/)
-  destroy-demo   [-e env]             Supprime la démo multi-AZ
+  kubeconfig     [-e env]              Affiche la commande export KUBECONFIG
+  wait-nodes     [-e env] [-t TIMEOUT] Attend que tous les nodes soient Ready
+  deploy-demo    [-e env]              Déploie la démo multi-AZ (+ wait LB + test HTTP)
+  destroy-demo   [-e env]              Retire la démo multi-AZ
+
+${BOLD}Orchestration end-to-end :${NC}
+  full-deploy    [-e env] [--with-demo]  apply → wait-nodes → (option démo) → verify
+  full-destroy   [-e env]                destroy-demo (si présent) → tf destroy
+
+${BOLD}Diagnostic :${NC}
+  verify         [-e env]              Récap : outputs TF + nodes + pods + svc démo
+  doctor                               Vérifie que tous les outils requis sont installés
 
 ${BOLD}Options :${NC}
   -e, --env ENV       Environnement cible (défaut: $DEFAULT_ENV)
   -u, --user USER     Utilisateur SSH (défaut: ubuntu)
   -a, --auto-approve  Applique sans confirmation (deploy/destroy)
+  -t, --timeout TIME  Timeout pour wait-nodes (défaut: 5m, ex: 10m, 300s)
+  --with-demo         Déploie aussi la démo multi-AZ (full-deploy uniquement)
   -h, --help          Affiche cette aide
 
+${BOLD}Notes :${NC}
+  - Le bon openrc_*.sh est sourcé automatiquement selon la région détectée
+    (priorité : terraform.tfvars > nom de l'env)
+  - full-deploy / full-destroy lancent toutes les étapes auto-approve : un seul Go suffit
+
 ${BOLD}Exemples :${NC}
-  $(basename "$0") deploy -e sandbox-sbg5          # Déploie la VM
-  $(basename "$0") deploy -e mks-sandbox-par       # Déploie le cluster MKS
-  $(basename "$0") kubeconfig -e mks-sandbox-par   # Exporte kubeconfig
-  $(basename "$0") deploy-demo -e mks-sandbox-par  # Déploie la démo multi-AZ
-  $(basename "$0") ssh -e sandbox-sbg5              # SSH vers la VM
+  $(basename "$0") doctor                                  # Check des prérequis
+  $(basename "$0") full-deploy -e mks-sandbox-par --with-demo  # Tout déployer + démo + URL
+  $(basename "$0") verify -e mks-sandbox-par               # Diagnostic complet
+  $(basename "$0") full-destroy -e mks-sandbox-par         # Tout retirer en une commande
+  $(basename "$0") wait-nodes -e mks-sandbox-par -t 10m    # Wait nodes avec timeout custom
 
 EOF
 }
@@ -100,6 +158,7 @@ EOF
 cmd_init() {
   local env="$1"
   check_env "$env"
+  source_openrc "$env"
   info "Initialisation de l'environnement ${BOLD}$env${NC}"
   terraform -chdir="$(env_dir "$env")" init
   ok "Initialisation terminée"
@@ -108,6 +167,7 @@ cmd_init() {
 cmd_plan() {
   local env="$1"
   check_env "$env"
+  source_openrc "$env"
   info "Plan de l'environnement ${BOLD}$env${NC}"
   terraform -chdir="$(env_dir "$env")" plan
 }
@@ -116,6 +176,7 @@ cmd_deploy() {
   local env="$1"
   local auto_approve="$2"
   check_env "$env"
+  source_openrc "$env"
 
   local dir
   dir="$(env_dir "$env")"
@@ -143,6 +204,7 @@ cmd_destroy() {
   local env="$1"
   local auto_approve="$2"
   check_env "$env"
+  source_openrc "$env"
 
   local dir
   dir="$(env_dir "$env")"
@@ -223,6 +285,59 @@ cmd_status() {
   info "${BOLD}${total}${NC} ressource(s) dans le state"
 }
 
+cmd_wait_nodes() {
+  local env="$1"
+  local timeout="$2"
+  check_env "$env"
+
+  local dir kubeconfig
+  dir="$(env_dir "$env")"
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+
+  if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
+    error "Aucun cluster MKS dans l'env '$env'."
+    exit 1
+  fi
+
+  info "Attente que tous les nodes soient Ready (timeout: ${BOLD}${timeout}${NC})"
+  KUBECONFIG="$kubeconfig" kubectl wait --for=condition=Ready nodes --all --timeout="$timeout"
+  ok "Tous les nodes sont Ready"
+  echo ""
+  KUBECONFIG="$kubeconfig" kubectl get nodes -o wide
+}
+
+cmd_verify() {
+  local env="$1"
+  check_env "$env"
+
+  local dir
+  dir="$(env_dir "$env")"
+
+  echo ""
+  info "${BOLD}=== Outputs Terraform ===${NC}"
+  terraform -chdir="$dir" output 2>/dev/null || warn "Aucun output (env non déployé ?)"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ] && [ -f "$kubeconfig" ]; then
+    echo ""
+    info "${BOLD}=== Nodes Kubernetes ===${NC}"
+    KUBECONFIG="$kubeconfig" kubectl get nodes -o wide || warn "kubectl get nodes a échoué"
+    echo ""
+    info "${BOLD}=== Pods (tous namespaces) ===${NC}"
+    KUBECONFIG="$kubeconfig" kubectl get pods -A
+    echo ""
+    info "${BOLD}=== Service zone-demo (si déployé) ===${NC}"
+    if KUBECONFIG="$kubeconfig" kubectl get svc zone-demo &>/dev/null; then
+      KUBECONFIG="$kubeconfig" kubectl get svc zone-demo
+    else
+      info "  (démo non déployée)"
+    fi
+  fi
+  echo ""
+  ok "Verify terminé"
+}
+
 cmd_kubeconfig() {
   local env="$1"
   check_env "$env"
@@ -283,11 +398,111 @@ cmd_deploy_demo() {
   KUBECONFIG="$kubeconfig" kubectl apply -f "$demo_dir/"
 
   echo ""
-  info "Patiente 1-2 min que l'IP publique du LoadBalancer soit provisionnée, puis :"
+  info "Attente du rollout du déploiement (timeout 2min)..."
+  KUBECONFIG="$kubeconfig" kubectl rollout status deployment/zone-demo --timeout=2m
+
   echo ""
-  echo "  ${BOLD}KUBECONFIG=$kubeconfig kubectl get svc zone-demo${NC}"
+  info "Attente de l'IP publique du LoadBalancer (timeout 3min)..."
+  local ext_ip="" i=0
+  while [ "$i" -lt 36 ]; do
+    ext_ip=$(KUBECONFIG="$kubeconfig" kubectl get svc zone-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+    if [ -n "$ext_ip" ]; then break; fi
+    printf "."
+    sleep 5
+    i=$((i + 1))
+  done
   echo ""
-  ok "Démo déployée"
+
+  if [ -z "$ext_ip" ]; then
+    warn "Pas d'IP publique obtenue après 3min."
+    warn "Vérifie manuellement : KUBECONFIG=$kubeconfig kubectl get svc zone-demo"
+    return 1
+  fi
+
+  ok "LoadBalancer IP : ${BOLD}${ext_ip}${NC}"
+
+  echo ""
+  info "Test HTTP sur http://${ext_ip} ..."
+  if curl -sfI --max-time 10 "http://${ext_ip}" >/dev/null; then
+    ok "HTTP 2xx confirmé"
+  else
+    warn "HTTP a échoué (peut être un délai initial, réessaie dans ~30s)"
+  fi
+
+  echo ""
+  ok "Démo déployée — URL : ${BOLD}http://${ext_ip}${NC}"
+}
+
+cmd_doctor() {
+  echo ""
+  info "${BOLD}=== Check des prérequis ===${NC}"
+  local missing=0
+  for tool in terraform kubectl openstack jq curl; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      local v
+      v=$("$tool" --version 2>&1 | head -1)
+      ok "$tool : $v"
+    else
+      error "$tool : non installé"
+      missing=$((missing + 1))
+    fi
+  done
+  echo ""
+  if [ "$missing" -eq 0 ]; then
+    ok "Tous les prérequis sont présents"
+  else
+    error "$missing outil(s) manquant(s) — relance _init-project/setup.sh"
+    exit 1
+  fi
+}
+
+cmd_full_deploy() {
+  local env="$1"
+  local with_demo="$2"
+  check_env "$env"
+
+  info "${BOLD}=== Étape 1 : terraform apply ===${NC}"
+  cmd_deploy "$env" "true"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$(env_dir "$env")" "kubeconfig_path")
+  if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ]; then
+    echo ""
+    info "${BOLD}=== Étape 2 : attente nodes Ready ===${NC}"
+    cmd_wait_nodes "$env" "5m"
+
+    if [ "$with_demo" = "true" ]; then
+      echo ""
+      info "${BOLD}=== Étape 3 : déploiement démo ===${NC}"
+      cmd_deploy_demo "$env"
+    fi
+  fi
+
+  echo ""
+  info "${BOLD}=== Étape finale : verify ===${NC}"
+  cmd_verify "$env"
+
+  echo ""
+  ok "${BOLD}full-deploy terminé pour '$env'${NC}"
+}
+
+cmd_full_destroy() {
+  local env="$1"
+  check_env "$env"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$(env_dir "$env")" "kubeconfig_path")
+  if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ] && [ -f "$kubeconfig" ]; then
+    info "${BOLD}=== Étape 1 : suppression démo (si présente) ===${NC}"
+    cmd_destroy_demo "$env" || warn "destroy-demo a échoué (on continue)"
+    echo ""
+  fi
+
+  info "${BOLD}=== Étape 2 : terraform destroy ===${NC}"
+  cmd_destroy "$env" "true"
+
+  echo ""
+  ok "${BOLD}full-destroy terminé pour '$env'${NC}"
 }
 
 cmd_destroy_demo() {
@@ -325,6 +540,8 @@ shift
 ENV="$DEFAULT_ENV"
 USER_SSH="ubuntu"
 AUTO_APPROVE="false"
+TIMEOUT="5m"
+WITH_DEMO="false"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -338,6 +555,14 @@ while [ $# -gt 0 ]; do
       ;;
     -a | --auto-approve)
       AUTO_APPROVE="true"
+      shift
+      ;;
+    -t | --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    --with-demo)
+      WITH_DEMO="true"
       shift
       ;;
     -h | --help)
@@ -364,8 +589,13 @@ case "$COMMAND" in
   output) cmd_output "$ENV" ;;
   status) cmd_status "$ENV" ;;
   kubeconfig) cmd_kubeconfig "$ENV" ;;
+  wait-nodes) cmd_wait_nodes "$ENV" "$TIMEOUT" ;;
+  verify) cmd_verify "$ENV" ;;
   deploy-demo) cmd_deploy_demo "$ENV" ;;
   destroy-demo) cmd_destroy_demo "$ENV" ;;
+  full-deploy) cmd_full_deploy "$ENV" "$WITH_DEMO" ;;
+  full-destroy) cmd_full_destroy "$ENV" ;;
+  doctor) cmd_doctor ;;
   envs) list_envs ;;
   -h | --help | help)
     usage
