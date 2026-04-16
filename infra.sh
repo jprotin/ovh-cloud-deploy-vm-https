@@ -269,6 +269,59 @@ cmd_status() {
   info "${BOLD}${total}${NC} ressource(s) dans le state"
 }
 
+cmd_wait_nodes() {
+  local env="$1"
+  local timeout="$2"
+  check_env "$env"
+
+  local dir kubeconfig
+  dir="$(env_dir "$env")"
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+
+  if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
+    error "Aucun cluster MKS dans l'env '$env'."
+    exit 1
+  fi
+
+  info "Attente que tous les nodes soient Ready (timeout: ${BOLD}${timeout}${NC})"
+  KUBECONFIG="$kubeconfig" kubectl wait --for=condition=Ready nodes --all --timeout="$timeout"
+  ok "Tous les nodes sont Ready"
+  echo ""
+  KUBECONFIG="$kubeconfig" kubectl get nodes -o wide
+}
+
+cmd_verify() {
+  local env="$1"
+  check_env "$env"
+
+  local dir
+  dir="$(env_dir "$env")"
+
+  echo ""
+  info "${BOLD}=== Outputs Terraform ===${NC}"
+  terraform -chdir="$dir" output 2>/dev/null || warn "Aucun output (env non déployé ?)"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ] && [ -f "$kubeconfig" ]; then
+    echo ""
+    info "${BOLD}=== Nodes Kubernetes ===${NC}"
+    KUBECONFIG="$kubeconfig" kubectl get nodes -o wide || warn "kubectl get nodes a échoué"
+    echo ""
+    info "${BOLD}=== Pods (tous namespaces) ===${NC}"
+    KUBECONFIG="$kubeconfig" kubectl get pods -A
+    echo ""
+    info "${BOLD}=== Service zone-demo (si déployé) ===${NC}"
+    if KUBECONFIG="$kubeconfig" kubectl get svc zone-demo &>/dev/null; then
+      KUBECONFIG="$kubeconfig" kubectl get svc zone-demo
+    else
+      info "  (démo non déployée)"
+    fi
+  fi
+  echo ""
+  ok "Verify terminé"
+}
+
 cmd_kubeconfig() {
   local env="$1"
   check_env "$env"
@@ -371,6 +424,7 @@ shift
 ENV="$DEFAULT_ENV"
 USER_SSH="ubuntu"
 AUTO_APPROVE="false"
+TIMEOUT="5m"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -385,6 +439,10 @@ while [ $# -gt 0 ]; do
     -a | --auto-approve)
       AUTO_APPROVE="true"
       shift
+      ;;
+    -t | --timeout)
+      TIMEOUT="$2"
+      shift 2
       ;;
     -h | --help)
       usage
@@ -410,6 +468,8 @@ case "$COMMAND" in
   output) cmd_output "$ENV" ;;
   status) cmd_status "$ENV" ;;
   kubeconfig) cmd_kubeconfig "$ENV" ;;
+  wait-nodes) cmd_wait_nodes "$ENV" "$TIMEOUT" ;;
+  verify) cmd_verify "$ENV" ;;
   deploy-demo) cmd_deploy_demo "$ENV" ;;
   destroy-demo) cmd_destroy_demo "$ENV" ;;
   envs) list_envs ;;
