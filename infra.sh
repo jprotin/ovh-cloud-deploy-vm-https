@@ -382,11 +382,39 @@ cmd_deploy_demo() {
   KUBECONFIG="$kubeconfig" kubectl apply -f "$demo_dir/"
 
   echo ""
-  info "Patiente 1-2 min que l'IP publique du LoadBalancer soit provisionnée, puis :"
+  info "Attente du rollout du déploiement (timeout 2min)..."
+  KUBECONFIG="$kubeconfig" kubectl rollout status deployment/zone-demo --timeout=2m
+
   echo ""
-  echo "  ${BOLD}KUBECONFIG=$kubeconfig kubectl get svc zone-demo${NC}"
+  info "Attente de l'IP publique du LoadBalancer (timeout 3min)..."
+  local ext_ip="" i=0
+  while [ "$i" -lt 36 ]; do
+    ext_ip=$(KUBECONFIG="$kubeconfig" kubectl get svc zone-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+    if [ -n "$ext_ip" ]; then break; fi
+    printf "."
+    sleep 5
+    i=$((i + 1))
+  done
   echo ""
-  ok "Démo déployée"
+
+  if [ -z "$ext_ip" ]; then
+    warn "Pas d'IP publique obtenue après 3min."
+    warn "Vérifie manuellement : KUBECONFIG=$kubeconfig kubectl get svc zone-demo"
+    return 1
+  fi
+
+  ok "LoadBalancer IP : ${BOLD}${ext_ip}${NC}"
+
+  echo ""
+  info "Test HTTP sur http://${ext_ip} ..."
+  if curl -sfI --max-time 10 "http://${ext_ip}" >/dev/null; then
+    ok "HTTP 2xx confirmé"
+  else
+    warn "HTTP a échoué (peut être un délai initial, réessaie dans ~30s)"
+  fi
+
+  echo ""
+  ok "Démo déployée — URL : ${BOLD}http://${ext_ip}${NC}"
 }
 
 cmd_destroy_demo() {
