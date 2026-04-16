@@ -18,6 +18,38 @@ variable "ovh_service_name" {
   type        = string
 }
 
+# -------------------------------------------------------
+# OpenStack (pour provisionner le réseau privé)
+# -------------------------------------------------------
+variable "os_auth_url" {
+  type    = string
+  default = "https://auth.cloud.ovh.net/v3"
+}
+variable "os_tenant_id" {
+  type = string
+}
+variable "os_tenant_name" {
+  type = string
+}
+variable "os_username" {
+  type = string
+}
+variable "os_password" {
+  type      = string
+  sensitive = true
+}
+variable "os_region" {
+  description = "Region OpenStack (ex: EU-WEST-PAR pour Paris 3AZ)"
+  type        = string
+  default     = "EU-WEST-PAR"
+}
+
+variable "subnet_cidr" {
+  description = "CIDR du subnet privé pour les nodes MKS"
+  type        = string
+  default     = "10.200.1.0/24"
+}
+
 # Projet
 variable "project_name" {
   type    = string
