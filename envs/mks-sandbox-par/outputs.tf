@@ -39,8 +39,8 @@ output "total_nodes" {
 }
 
 output "kubeconfig_path" {
-  description = "Chemin local du kubeconfig"
-  value       = local_file.kubeconfig.filename
+  description = "Chemin absolu du kubeconfig local"
+  value       = abspath(local_file.kubeconfig.filename)
 }
 
 output "kubectl_command" {
