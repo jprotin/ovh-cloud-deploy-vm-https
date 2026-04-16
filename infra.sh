@@ -54,6 +54,48 @@ tf_output_raw() {
   terraform -chdir="$dir" output -raw "$name" 2>/dev/null || echo ""
 }
 
+# Détecte la région cible d'un env (priorité : terraform.tfvars > nom de l'env)
+detect_region() {
+  local env="$1"
+  local tfvars
+  tfvars="$(env_dir "$env")/terraform.tfvars"
+  local region=""
+  if [ -f "$tfvars" ]; then
+    region=$(grep -E '^[[:space:]]*region[[:space:]]*=' "$tfvars" | head -1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')
+  fi
+  if [ -z "$region" ]; then
+    case "$env" in
+      *par*) region="EU-WEST-PAR" ;;
+      *sbg*) region="SBG5" ;;
+    esac
+  fi
+  echo "$region"
+}
+
+# Source le bon openrc en fonction de la région cible (warning + continue si absent)
+source_openrc() {
+  local env="$1"
+  local region openrc
+  region=$(detect_region "$env")
+  case "$region" in
+    *PAR*) openrc="$SCRIPT_DIR/openrc_PAR.sh" ;;
+    *SBG*) openrc="$SCRIPT_DIR/openrc_SBG.sh" ;;
+    *)
+      warn "Région inconnue pour env '$env' (region='$region') — pas de sourcing openrc"
+      return 0
+      ;;
+  esac
+  if [ ! -f "$openrc" ]; then
+    warn "Fichier $(basename "$openrc") absent — pas de sourcing (vérifie OS_* en env si besoin)"
+    return 0
+  fi
+  info "Sourcing $(basename "$openrc")"
+  set +u
+  # shellcheck source=/dev/null
+  . "$openrc"
+  set -u
+}
+
 # -------------------------------------------------------
 # Help
 # -------------------------------------------------------
@@ -100,6 +142,7 @@ EOF
 cmd_init() {
   local env="$1"
   check_env "$env"
+  source_openrc "$env"
   info "Initialisation de l'environnement ${BOLD}$env${NC}"
   terraform -chdir="$(env_dir "$env")" init
   ok "Initialisation terminée"
@@ -108,6 +151,7 @@ cmd_init() {
 cmd_plan() {
   local env="$1"
   check_env "$env"
+  source_openrc "$env"
   info "Plan de l'environnement ${BOLD}$env${NC}"
   terraform -chdir="$(env_dir "$env")" plan
 }
@@ -116,6 +160,7 @@ cmd_deploy() {
   local env="$1"
   local auto_approve="$2"
   check_env "$env"
+  source_openrc "$env"
 
   local dir
   dir="$(env_dir "$env")"
@@ -143,6 +188,7 @@ cmd_destroy() {
   local env="$1"
   local auto_approve="$2"
   check_env "$env"
+  source_openrc "$env"
 
   local dir
   dir="$(env_dir "$env")"
