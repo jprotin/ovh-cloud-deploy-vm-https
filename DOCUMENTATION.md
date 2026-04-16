@@ -438,35 +438,66 @@ mks_nodes_per_pool = 1
 
 ### 9.1 Commandes disponibles
 
-| Commande       | Options             | Rôle                                      |
-| -------------- | ------------------- | ----------------------------------------- |
-| `init`         | `-e env`            | `terraform init`                          |
-| `plan`         | `-e env`            | `terraform plan`                          |
-| `deploy`       | `-e env`, `-a`      | `terraform apply` (auto-init si besoin)   |
-| `destroy`      | `-e env`, `-a`      | Détache routeur OVH + `terraform destroy` |
-| `output`       | `-e env`            | Affiche les outputs Terraform             |
-| `status`       | `-e env`            | Affiche l'état des ressources             |
-| `envs`         | —                   | Liste les environnements                  |
-| `ssh`          | `-e env`, `-u user` | Connexion SSH à la VM                     |
-| `kubeconfig`   | `-e env`            | Affiche `export KUBECONFIG=...`           |
-| `deploy-demo`  | `-e env`            | Applique les manifestes de démo multi-AZ  |
-| `destroy-demo` | `-e env`            | Supprime les manifestes de démo           |
-| `help`         | —                   | Aide                                      |
+#### Commandes Terraform
+
+| Commande  | Options        | Rôle                                      |
+| --------- | -------------- | ----------------------------------------- |
+| `init`    | `-e env`       | `terraform init`                          |
+| `plan`    | `-e env`       | `terraform plan`                          |
+| `deploy`  | `-e env`, `-a` | `terraform apply` (auto-init si besoin)   |
+| `destroy` | `-e env`, `-a` | Détache routeur OVH + `terraform destroy` |
+| `output`  | `-e env`       | Affiche les outputs Terraform             |
+| `status`  | `-e env`       | Affiche l'état des ressources             |
+| `envs`    | —              | Liste les environnements                  |
+
+#### Commandes VM
+
+| Commande | Options             | Rôle                  |
+| -------- | ------------------- | --------------------- |
+| `ssh`    | `-e env`, `-u user` | Connexion SSH à la VM |
+
+#### Commandes MKS
+
+| Commande       | Options           | Rôle                                                        |
+| -------------- | ----------------- | ----------------------------------------------------------- |
+| `kubeconfig`   | `-e env`          | Affiche `export KUBECONFIG=...`                             |
+| `wait-nodes`   | `-e env`, `-t 5m` | `kubectl wait` sur tous les nodes (timeout configurable)    |
+| `deploy-demo`  | `-e env`          | Déploie la démo + `rollout status` + wait IP LB + test HTTP |
+| `destroy-demo` | `-e env`          | Retire les manifestes de démo                               |
+
+#### Orchestration end-to-end
+
+| Commande       | Options                 | Rôle                                                                                       |
+| -------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
+| `full-deploy`  | `-e env`, `--with-demo` | `deploy` (auto-approve) → `wait-nodes` → (option `--with-demo` : `deploy-demo`) → `verify` |
+| `full-destroy` | `-e env`                | `destroy-demo` (si présent) → `destroy` (auto-approve)                                     |
+
+#### Diagnostic
+
+| Commande | Options  | Rôle                                                                  |
+| -------- | -------- | --------------------------------------------------------------------- |
+| `verify` | `-e env` | Récap : outputs TF + nodes Kubernetes + pods + svc démo               |
+| `doctor` | —        | Vérifie présence + version de terraform, kubectl, openstack, jq, curl |
+| `help`   | —        | Aide complète                                                         |
 
 ### 9.2 Options globales
 
-| Option               | Défaut         | Description         |
-| -------------------- | -------------- | ------------------- |
-| `-e, --env`          | `sandbox-sbg5` | Env cible           |
-| `-u, --user`         | `ubuntu`       | User SSH            |
-| `-a, --auto-approve` | off            | Pas de confirmation |
+| Option               | Défaut         | Description                                           |
+| -------------------- | -------------- | ----------------------------------------------------- |
+| `-e, --env`          | `sandbox-sbg5` | Env cible                                             |
+| `-u, --user`         | `ubuntu`       | User SSH                                              |
+| `-a, --auto-approve` | off            | Pas de confirmation (deploy/destroy)                  |
+| `-t, --timeout`      | `5m`           | Timeout pour `wait-nodes` (ex: `10m`, `300s`)         |
+| `--with-demo`        | off            | Déploie aussi la démo (uniquement avec `full-deploy`) |
 
 ### 9.3 Fonctionnement interne
 
-- **Auto-init** : `deploy` lance `terraform init` si `.terraform/` absent
-- **Détachement routeur** : `destroy` détecte la présence d'une VM (via output `vm_name`) et détache l'interface routeur OVH avant le `terraform destroy` (contournement d'une limitation OVHcloud)
-- **Outputs intelligents** : les commandes `ssh`/`kubeconfig` détectent les outputs `null` et affichent un message d'erreur explicite si le workload n'est pas activé
-- **Démo K8s** : `deploy-demo` utilise automatiquement le `kubeconfig.yaml` généré par Terraform
+- **Sourcing openrc automatique** : avant chaque opération Terraform (`init`, `plan`, `deploy`, `destroy`), `infra.sh` détecte la région cible (priorité : `terraform.tfvars` > nom de l'env, ex `*par*` → PAR, `*sbg*` → SBG) et source le bon `openrc_<REGION>.sh`. Plus besoin de le faire à la main. Si le fichier est absent, warning + continue (l'utilisateur peut avoir ses propres `OS_*` exportées). Voir [ADR 0004](docs/adr/0004-strategie-openrc-par-region.md).
+- **Auto-init** : `deploy` lance `terraform init` si `.terraform/` absent.
+- **Détachement routeur** : `destroy` détecte la présence d'une VM (via output `vm_name`) et détache l'interface routeur OVH avant le `terraform destroy` (contournement d'une limitation OVHcloud).
+- **Outputs intelligents** : les commandes `ssh`/`kubeconfig`/`wait-nodes` détectent les outputs `null` et affichent un message d'erreur explicite si le workload n'est pas activé.
+- **Wait LB sur deploy-demo** : après `kubectl apply`, `infra.sh` attend le `rollout status` (timeout 2min), boucle sur l'IP publique du LoadBalancer (timeout 3min, polling 5s) et lance `curl -sfI` sur l'IP obtenue pour confirmer le succès.
+- **Démo K8s** : `deploy-demo` utilise automatiquement le `kubeconfig.yaml` généré par Terraform.
 
 ---
 
@@ -487,17 +518,27 @@ cd ../..
 ```bash
 cd envs/mks-sandbox-par
 cp terraform.tfvars.dist terraform.tfvars
-# Éditer : ovh_*_key, ovh_service_name
+# Éditer : ovh_*_key, ovh_service_name, os_tenant_id, os_tenant_name, os_username, os_password
+# (les os_* sont requis car l'env appelle le module network pour le subnet privé)
 cd ../..
 
-./infra.sh deploy -e mks-sandbox-par     # 5-10 min
-./infra.sh output -e mks-sandbox-par     # voir les détails
+# OPTION 1 — tout en une commande (recommandé) :
+./infra.sh full-deploy -e mks-sandbox-par --with-demo
+# → apply → wait-nodes Ready → deploy-demo → wait LB → curl test → verify
+# → URL finale affichée à la fin
+
+# OPTION 2 — étapes séparées (debug ou contrôle fin) :
+./infra.sh deploy        -e mks-sandbox-par     # 5-10 min
+./infra.sh wait-nodes    -e mks-sandbox-par     # attend Ready
+./infra.sh deploy-demo   -e mks-sandbox-par     # déploie + wait LB + test HTTP
+./infra.sh verify        -e mks-sandbox-par     # récap final
 ```
 
 Après le deploy :
 
 - `kubeconfig.yaml` est écrit automatiquement dans `envs/mks-sandbox-par/`
 - `./infra.sh kubeconfig -e mks-sandbox-par` donne la commande `export` à utiliser
+- Le bon `openrc_PAR.sh` est sourcé automatiquement (cf. § 9.3)
 
 ### 10.3 Déploiement flexible (sandbox-par)
 
@@ -720,12 +761,21 @@ Le script détecte la présence d'une VM (via l'output `vm_name`) et détache l'
 
 ### 13.3 Ordre de destruction (MKS)
 
-```
-1. ./infra.sh destroy-demo -e <env>   # supprimer les manifestes K8s (+ LB)
-2. ./infra.sh destroy     -e <env>    # détruire le cluster MKS
+Pour un cluster MKS avec démo déployée, **ne pas inverser** l'ordre — sinon le LB Octavia créé par le `Service type=LoadBalancer` reste orphelin côté OVHcloud (et continue à être facturé).
+
+#### Option 1 — En une commande (recommandé)
+
+```bash
+./infra.sh full-destroy -e <env>
+# → destroy-demo (si présent, en ignorant les erreurs) → tf destroy auto-approve
 ```
 
-Ne pas inverser — sinon le LB Octavia créé par le `Service type=LoadBalancer` reste orphelin côté OVHcloud.
+#### Option 2 — Étapes séparées
+
+```bash
+1. ./infra.sh destroy-demo -e <env>   # supprime les manifestes K8s (+ LB Octavia)
+2. ./infra.sh destroy      -e <env>   # détruit le cluster MKS
+```
 
 ---
 
