@@ -1,4 +1,22 @@
 # -------------------------------------------------------
+# Réseau privé + subnet (requis pour MKS en région 3AZ)
+# Mode minimal : pas de routeur, secgroup, ni keypair (MKS n'en a pas besoin)
+# -------------------------------------------------------
+module "network" {
+  source = "../../modules/network"
+
+  project_name = var.project_name
+  region       = var.region
+
+  # Features désactivées : MKS se charge de tout
+  enable_router   = false
+  enable_secgroup = false
+  enable_keypair  = false
+
+  subnet_cidr = var.subnet_cidr
+}
+
+# -------------------------------------------------------
 # Cluster MKS (Paris 3AZ — multi-AZ par défaut)
 # -------------------------------------------------------
 module "mks" {
@@ -15,6 +33,10 @@ module "mks" {
   nodes_per_pool = var.nodes_per_pool
 
   api_allowed_cidrs = var.api_allowed_cidrs
+
+  # Réseau privé + subnet requis en région 3AZ
+  private_network_id = module.network.network_id
+  nodes_subnet_id    = module.network.subnet_id
 }
 
 # -------------------------------------------------------

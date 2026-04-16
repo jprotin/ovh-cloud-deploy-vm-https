@@ -3,8 +3,16 @@ ovh_application_key    = "XXXXXXXXXXXXXXXXXX"
 ovh_application_secret = "XXXXXXXXXXXXXXXXXX"
 ovh_consumer_key       = "XXXXXXXXXXXXXXXXXX"
 
-# Tenant OVHcloud Public Cloud (service_name)
+# Tenant OVHcloud Public Cloud (service_name) — ID hex 32 chars, PAS le nom friendly
 ovh_service_name = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# OpenStack (pour provisionner le réseau privé requis en Paris 3AZ)
+# Récupérables dans Manager OVH → Public Cloud → Users & Roles → openrc.sh
+os_tenant_id   = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+os_tenant_name = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+os_username    = "user-XXXXXXXXXXXX"
+os_password    = "XXXXXXXXXXXXXXXXXXXX"
+# os_region = "EU-WEST-PAR"  # défaut
 
 # Projet
 project_name = "mks-sandbox-par"
@@ -12,6 +20,9 @@ cluster_name = "mks-sandbox-par"
 
 # Région Paris 3AZ
 region = "EU-WEST-PAR"
+
+# CIDR du subnet privé pour les nodes MKS
+# subnet_cidr = "10.200.1.0/24"
 
 # Multi-AZ (1, 2 ou 3)
 az_count = 2
