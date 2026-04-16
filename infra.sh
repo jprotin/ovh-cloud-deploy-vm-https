@@ -103,35 +103,51 @@ usage() {
   cat <<EOF
 ${BOLD}Usage:${NC} $(basename "$0") <commande> [options]
 
-${BOLD}Commandes générales :${NC}
-  init           [-e env]          Initialise Terraform (terraform init)
-  plan           [-e env]          Prévisualise les changements
-  deploy         [-e env] [-a]     Déploie l'infrastructure
-  destroy        [-e env] [-a]     Détruit l'infrastructure
-  output         [-e env]          Affiche les outputs Terraform
-  status         [-e env]          Affiche l'état des ressources
-  envs                             Liste les environnements disponibles
+${BOLD}Commandes Terraform :${NC}
+  init           [-e env]              Initialise Terraform (terraform init)
+  plan           [-e env]              Prévisualise les changements
+  deploy         [-e env] [-a]         Déploie l'infrastructure
+  destroy        [-e env] [-a]         Détruit l'infrastructure
+  output         [-e env]              Affiche les outputs Terraform
+  status         [-e env]              Affiche l'état des ressources
+  envs                                 Liste les environnements disponibles
 
 ${BOLD}Commandes VM :${NC}
-  ssh            [-e env] [-u user]   Connexion SSH à la VM
+  ssh            [-e env] [-u user]    Connexion SSH à la VM
 
 ${BOLD}Commandes MKS :${NC}
-  kubeconfig     [-e env]             Affiche la commande export KUBECONFIG
-  deploy-demo    [-e env]             Déploie la démo multi-AZ (examples/k8s-multi-az-demo/)
-  destroy-demo   [-e env]             Supprime la démo multi-AZ
+  kubeconfig     [-e env]              Affiche la commande export KUBECONFIG
+  wait-nodes     [-e env] [-t TIMEOUT] Attend que tous les nodes soient Ready
+  deploy-demo    [-e env]              Déploie la démo multi-AZ (+ wait LB + test HTTP)
+  destroy-demo   [-e env]              Retire la démo multi-AZ
+
+${BOLD}Orchestration end-to-end :${NC}
+  full-deploy    [-e env] [--with-demo]  apply → wait-nodes → (option démo) → verify
+  full-destroy   [-e env]                destroy-demo (si présent) → tf destroy
+
+${BOLD}Diagnostic :${NC}
+  verify         [-e env]              Récap : outputs TF + nodes + pods + svc démo
+  doctor                               Vérifie que tous les outils requis sont installés
 
 ${BOLD}Options :${NC}
   -e, --env ENV       Environnement cible (défaut: $DEFAULT_ENV)
   -u, --user USER     Utilisateur SSH (défaut: ubuntu)
   -a, --auto-approve  Applique sans confirmation (deploy/destroy)
+  -t, --timeout TIME  Timeout pour wait-nodes (défaut: 5m, ex: 10m, 300s)
+  --with-demo         Déploie aussi la démo multi-AZ (full-deploy uniquement)
   -h, --help          Affiche cette aide
 
+${BOLD}Notes :${NC}
+  - Le bon openrc_*.sh est sourcé automatiquement selon la région détectée
+    (priorité : terraform.tfvars > nom de l'env)
+  - full-deploy / full-destroy lancent toutes les étapes auto-approve : un seul Go suffit
+
 ${BOLD}Exemples :${NC}
-  $(basename "$0") deploy -e sandbox-sbg5          # Déploie la VM
-  $(basename "$0") deploy -e mks-sandbox-par       # Déploie le cluster MKS
-  $(basename "$0") kubeconfig -e mks-sandbox-par   # Exporte kubeconfig
-  $(basename "$0") deploy-demo -e mks-sandbox-par  # Déploie la démo multi-AZ
-  $(basename "$0") ssh -e sandbox-sbg5              # SSH vers la VM
+  $(basename "$0") doctor                                  # Check des prérequis
+  $(basename "$0") full-deploy -e mks-sandbox-par --with-demo  # Tout déployer + démo + URL
+  $(basename "$0") verify -e mks-sandbox-par               # Diagnostic complet
+  $(basename "$0") full-destroy -e mks-sandbox-par         # Tout retirer en une commande
+  $(basename "$0") wait-nodes -e mks-sandbox-par -t 10m    # Wait nodes avec timeout custom
 
 EOF
 }
