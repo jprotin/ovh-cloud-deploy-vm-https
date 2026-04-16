@@ -27,6 +27,7 @@
 15. [Dépannage](#15-dépannage)
 16. [Estimation des coûts](#16-estimation-des-coûts)
 17. [Évolutions possibles](#17-évolutions-possibles)
+18. [Décisions d'architecture (ADR)](#18-décisions-darchitecture-adr)
 
 ---
 
@@ -75,6 +76,10 @@ cat ~/.ssh/id_ed25519.pub   # Contenu à coller dans terraform.tfvars
 | python-openstackclient | >= 6.0      | `openstack --version`      |
 | kubectl                | >= 1.28     | `kubectl version --client` |
 | Git                    | >= 2.34     | `git --version`            |
+| jq                     | toute       | `jq --version`             |
+| curl                   | toute       | `curl --version`           |
+
+> Astuce : `./infra.sh doctor` vérifie tous les prérequis en une commande (sans installation).
 
 ---
 
@@ -94,9 +99,11 @@ Le script `_init-project/setup.sh` automatise l'installation des prérequis.
 | 2     | python-openstackclient | >= 6.0.0    | Installation via `apt`                       |
 | 3     | Git                    | >= 2.34.0   | Installation via `apt`                       |
 | 4     | kubectl                | >= 1.28.0   | Installation via dépôt Kubernetes officiel   |
-| 5     | Clé SSH                | —           | Affiche les instructions de génération       |
-| 6     | terraform.tfvars       | —           | Affiche les instructions de création         |
-| 7     | terraform init         | —           | Lance `terraform init` dans l'env par défaut |
+| 5     | jq                     | toute       | Installation via `apt`                       |
+| 6     | curl                   | toute       | Installation via `apt`                       |
+| 7     | Clé SSH                | —           | Affiche les instructions de génération       |
+| 8     | terraform.tfvars       | —           | Affiche les instructions de création         |
+| 9     | terraform init         | —           | Lance `terraform init` dans l'env par défaut |
 
 Si tout est déjà en place, le script affiche "Ton environnement est déjà prêt."
 
@@ -230,10 +237,14 @@ Ce projet fournit une **landing zone IaC** modulaire pour OVHcloud Public Cloud,
 ├── examples/
 │   └── k8s-multi-az-demo/        # Manifestes démo (RBAC, ConfigMap, Deployment, Service)
 │
+├── docs/
+│   ├── adr/                      # Architecture Decision Records (cf. § 18)
+│   └── runbooks/                 # Procédures d'exploitation (à venir)
+│
 ├── _init-project/
 │   └── setup.sh                  # Installation prérequis
-├── infra.sh                      # CLI unifiée
-├── destroy.sh                    # Legacy (remplacé par infra.sh destroy)
+├── infra.sh                      # CLI unifiée (deploy, destroy, ssh, kubeconfig, full-deploy, verify, doctor...)
+├── destroy.sh                    # Legacy (remplacé par infra.sh destroy / full-destroy)
 ├── README.md                     # Doc rapide
 └── DOCUMENTATION.md              # Ce fichier
 ```
@@ -244,19 +255,29 @@ Ce projet fournit une **landing zone IaC** modulaire pour OVHcloud Public Cloud,
 
 ### 6.1 Module `network`
 
-Ressources : réseau privé, subnet, routeur, security group (SSH/HTTP/HTTPS/ICMP), keypair.
+Ressources : réseau privé + subnet (toujours créés) ; routeur, security group (SSH/HTTP/HTTPS/ICMP), keypair (optionnels via feature flags).
 
-| Variable          | Défaut                         | Description            |
-| ----------------- | ------------------------------ | ---------------------- |
-| `project_name`    | —                              | Préfixe des ressources |
-| `region`          | —                              | Région OpenStack       |
-| `subnet_cidr`     | `10.0.1.0/24`                  | CIDR du subnet         |
-| `dns_nameservers` | `["213.186.33.99", "8.8.8.8"]` | DNS                    |
-| `ext_net_id`      | —                              | ID du réseau Ext-Net   |
-| `admin_cidr`      | —                              | CIDR autorisé SSH      |
-| `ssh_public_key`  | —                              | Clé publique SSH       |
+| Variable          | Défaut                         | Description                                         |
+| ----------------- | ------------------------------ | --------------------------------------------------- |
+| `project_name`    | —                              | Préfixe des ressources                              |
+| `region`          | —                              | Région OpenStack                                    |
+| `subnet_cidr`     | `10.0.1.0/24`                  | CIDR du subnet                                      |
+| `dns_nameservers` | `["213.186.33.99", "8.8.8.8"]` | DNS                                                 |
+| `ext_net_id`      | `null`                         | ID du réseau Ext-Net (requis si `enable_router`)    |
+| `admin_cidr`      | `null`                         | CIDR autorisé SSH (requis si `enable_secgroup`)     |
+| `ssh_public_key`  | `null`                         | Clé publique SSH (requis si `enable_keypair`)       |
+| `enable_router`   | `true`                         | Crée le routeur + interface (cas VM publique)       |
+| `enable_secgroup` | `true`                         | Crée le security group + règles SSH/HTTP/HTTPS/ICMP |
+| `enable_keypair`  | `true`                         | Crée la keypair SSH (inutile pour MKS)              |
 
-**Outputs** : `network_id`, `subnet_id`, `secgroup_id`, `keypair_name`, `router_id`.
+**Outputs** : `network_id`, `subnet_id` (toujours présents) ; `secgroup_id`, `keypair_name`, `router_id` (présents seulement si flag correspondant activé, sinon `null`).
+
+**Cas d'usage** :
+
+- **VM publique** (sandbox-sbg5) : tous les flags à `true` (défaut).
+- **MKS** (mks-sandbox-par) : tous les flags à `false` — MKS gère son propre routage et son filtrage. On ne garde que le réseau privé + subnet, requis en région 3AZ.
+
+Cette mécanique est documentée plus en détail dans [ADR 0003](docs/adr/0003-feature-flags-module-network.md).
 
 ### 6.2 Module `compute`
 
@@ -278,25 +299,27 @@ Ressources : port réseau, IP flottante, instance VM, association IP↔VM.
 
 Ressources : cluster MKS, node pool, IP restrictions (optionnel).
 
-| Variable                                    | Défaut                        | Description                                           |
-| ------------------------------------------- | ----------------------------- | ----------------------------------------------------- |
-| `service_name`                              | —                             | ID du projet Public Cloud (tenant)                    |
-| `cluster_name`                              | —                             | Nom du cluster                                        |
-| `region`                                    | —                             | Région MKS (ex: `EU-WEST-PAR`, `SBG5`)                |
-| `kube_version`                              | `null`                        | Version K8s (null = latest stable MKS)                |
-| `update_policy`                             | `MINIMAL_DOWNTIME`            | `ALWAYS_UPDATE` / `MINIMAL_DOWNTIME` / `NEVER_UPDATE` |
-| `az_count`                                  | `2`                           | 1/2/3 — nombre d'AZ logiques                          |
-| `availability_zones`                        | `["eu-west-par-a", …-b, …-c]` | Noms des AZ                                           |
-| `node_flavor`                               | `b2-7`                        | Flavor workers                                        |
-| `nodes_per_pool`                            | `1`                           | Nodes par AZ logique                                  |
-| `autoscale`                                 | `false`                       | Active autoscaling                                    |
-| `min_nodes_per_pool` / `max_nodes_per_pool` | `1` / `3`                     | Bornes autoscaling                                    |
-| `api_allowed_cidrs`                         | `[]`                          | Vide = 0.0.0.0/0                                      |
-| `private_network_id`                        | `null`                        | Null = cluster public                                 |
+| Variable                                    | Défaut             | Description                                                                |
+| ------------------------------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `service_name`                              | —                  | ID du projet Public Cloud (tenant)                                         |
+| `cluster_name`                              | —                  | Nom du cluster                                                             |
+| `region`                                    | —                  | Région MKS (ex: `EU-WEST-PAR`, `SBG5`)                                     |
+| `kube_version`                              | `null`             | Version K8s (null = latest stable MKS)                                     |
+| `update_policy`                             | `MINIMAL_DOWNTIME` | `ALWAYS_UPDATE` / `MINIMAL_DOWNTIME` / `NEVER_UPDATE`                      |
+| `az_count`                                  | `2`                | 1/2/3 — nombre d'AZ logiques (validation 1/2/3)                            |
+| `node_flavor`                               | `b2-7`             | Flavor workers                                                             |
+| `nodes_per_pool`                            | `1`                | Nodes par AZ logique                                                       |
+| `autoscale`                                 | `false`            | Active autoscaling                                                         |
+| `min_nodes_per_pool` / `max_nodes_per_pool` | `1` / `3`          | Bornes autoscaling                                                         |
+| `api_allowed_cidrs`                         | `[]`               | Vide = 0.0.0.0/0                                                           |
+| `private_network_id`                        | `null`             | ID du réseau privé OVH (**obligatoire** en région 3AZ comme `EU-WEST-PAR`) |
+| `nodes_subnet_id`                           | `null`             | ID du subnet OpenStack des nodes (**obligatoire** en région 3AZ)           |
 
 **Outputs** : `cluster_id`, `cluster_name`, `endpoint`, `version`, `kubeconfig` (sensitive), `nodepool`, `az_count`, `total_nodes`.
 
-Voir [section 11](#11-module-mks-kubernetes-managé) pour les détails techniques.
+> **Région 3AZ (`EU-WEST-PAR`)** : `private_network_id` ET `nodes_subnet_id` sont **obligatoires**. L'env `mks-sandbox-par` les fournit en appelant le module `network` (en mode minimal, voir § 6.1) et en passant `module.network.network_id` / `module.network.subnet_id` au module `mks`. En mono-AZ (SBG5), ces deux paramètres restent optionnels.
+
+Voir [section 11](#11-module-mks-kubernetes-managé) pour les détails techniques et [ADR 0006](docs/adr/0006-choix-region-paris-3az-vs-sbg-mono-az.md) pour le trade-off mono-AZ vs 3AZ.
 
 ### 6.4 Module `dbaas`
 
@@ -387,9 +410,29 @@ Générer sur <https://www.ovh.com/auth/api/createToken> avec les droits :
 
 Visible dans l'URL de ton projet Public Cloud : `https://www.ovh.com/manager/#/public-cloud/pci/projects/<SERVICE_NAME>`.
 
+C'est un **ID hex de 32 caractères**, pas le nom friendly du projet. L'utilisation du nom friendly renvoie un 404 sur les appels API.
+
 Cette valeur est requise pour **MKS** (variable `ovh_service_name`).
 
-### 8.4 terraform.tfvars (exemple complet pour sandbox-par)
+### 8.4 openrc par région OVHcloud
+
+Sur OVHcloud Public Cloud, **chaque région a ses propres credentials OpenStack**. Le projet attend un fichier `openrc_<REGION>.sh` par région utilisée :
+
+- `openrc_PAR.sh` pour les déploiements en région Paris (`EU-WEST-PAR`)
+- `openrc_SBG.sh` pour les déploiements en région Strasbourg (`SBG5`)
+- `openrc_<XXX>.sh` pour toute autre région
+
+Téléchargement : Manager OVH → Public Cloud → Users & Roles → cliquer sur l'utilisateur → onglet OpenRC → Download → renommer le fichier suivant la convention ci-dessus, à la racine du projet.
+
+Ces fichiers contiennent un mot de passe en clair, ils sont **automatiquement gitignorés** (pattern `openrc*.sh`).
+
+`infra.sh` source le bon fichier automatiquement avant chaque opération Terraform — pas besoin de `source openrc.sh` à la main. Si le fichier est absent : warning + continue (l'utilisateur peut avoir ses propres `OS_*` exportées dans son shell).
+
+> **Cohérence env ↔ openrc** : la détection région d'`infra.sh` se base d'abord sur la variable `region` du `terraform.tfvars`, sinon sur le nom de l'env (`*par*` → PAR, `*sbg*` → SBG). Si tu utilises un env nommé `sandbox-par` mais que tes ressources OpenStack sont en GRA, le sourcing automatique enverra le mauvais openrc — privilégie un nom d'env cohérent avec la région cible (`sandbox-gra` par exemple).
+
+Détails dans [ADR 0004](docs/adr/0004-strategie-openrc-par-region.md).
+
+### 8.5 terraform.tfvars (exemple complet pour sandbox-par)
 
 ```hcl
 # OVH API
@@ -403,12 +446,12 @@ enable_vm    = true
 enable_mks   = true
 enable_dbaas = false
 
-# VM (si enable_vm=true)
+# VM (si enable_vm=true) — credentials OpenStack en région PAR
 os_tenant_id   = "..."
 os_tenant_name = "..."
 os_username    = "user-..."
 os_password    = "..."
-os_region      = "GRA11"
+os_region      = "EU-WEST-PAR"
 ssh_public_key = "ssh-ed25519 AAAA..."
 admin_cidr     = "XX.XX.XX.XX/32"
 
@@ -425,35 +468,66 @@ mks_nodes_per_pool = 1
 
 ### 9.1 Commandes disponibles
 
-| Commande       | Options             | Rôle                                      |
-| -------------- | ------------------- | ----------------------------------------- |
-| `init`         | `-e env`            | `terraform init`                          |
-| `plan`         | `-e env`            | `terraform plan`                          |
-| `deploy`       | `-e env`, `-a`      | `terraform apply` (auto-init si besoin)   |
-| `destroy`      | `-e env`, `-a`      | Détache routeur OVH + `terraform destroy` |
-| `output`       | `-e env`            | Affiche les outputs Terraform             |
-| `status`       | `-e env`            | Affiche l'état des ressources             |
-| `envs`         | —                   | Liste les environnements                  |
-| `ssh`          | `-e env`, `-u user` | Connexion SSH à la VM                     |
-| `kubeconfig`   | `-e env`            | Affiche `export KUBECONFIG=...`           |
-| `deploy-demo`  | `-e env`            | Applique les manifestes de démo multi-AZ  |
-| `destroy-demo` | `-e env`            | Supprime les manifestes de démo           |
-| `help`         | —                   | Aide                                      |
+#### Commandes Terraform
+
+| Commande  | Options        | Rôle                                      |
+| --------- | -------------- | ----------------------------------------- |
+| `init`    | `-e env`       | `terraform init`                          |
+| `plan`    | `-e env`       | `terraform plan`                          |
+| `deploy`  | `-e env`, `-a` | `terraform apply` (auto-init si besoin)   |
+| `destroy` | `-e env`, `-a` | Détache routeur OVH + `terraform destroy` |
+| `output`  | `-e env`       | Affiche les outputs Terraform             |
+| `status`  | `-e env`       | Affiche l'état des ressources             |
+| `envs`    | —              | Liste les environnements                  |
+
+#### Commandes VM
+
+| Commande | Options             | Rôle                  |
+| -------- | ------------------- | --------------------- |
+| `ssh`    | `-e env`, `-u user` | Connexion SSH à la VM |
+
+#### Commandes MKS
+
+| Commande       | Options           | Rôle                                                        |
+| -------------- | ----------------- | ----------------------------------------------------------- |
+| `kubeconfig`   | `-e env`          | Affiche `export KUBECONFIG=...`                             |
+| `wait-nodes`   | `-e env`, `-t 5m` | `kubectl wait` sur tous les nodes (timeout configurable)    |
+| `deploy-demo`  | `-e env`          | Déploie la démo + `rollout status` + wait IP LB + test HTTP |
+| `destroy-demo` | `-e env`          | Retire les manifestes de démo                               |
+
+#### Orchestration end-to-end
+
+| Commande       | Options                 | Rôle                                                                                       |
+| -------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
+| `full-deploy`  | `-e env`, `--with-demo` | `deploy` (auto-approve) → `wait-nodes` → (option `--with-demo` : `deploy-demo`) → `verify` |
+| `full-destroy` | `-e env`                | `destroy-demo` (si présent) → `destroy` (auto-approve)                                     |
+
+#### Diagnostic
+
+| Commande | Options  | Rôle                                                                  |
+| -------- | -------- | --------------------------------------------------------------------- |
+| `verify` | `-e env` | Récap : outputs TF + nodes Kubernetes + pods + svc démo               |
+| `doctor` | —        | Vérifie présence + version de terraform, kubectl, openstack, jq, curl |
+| `help`   | —        | Aide complète                                                         |
 
 ### 9.2 Options globales
 
-| Option               | Défaut         | Description         |
-| -------------------- | -------------- | ------------------- |
-| `-e, --env`          | `sandbox-sbg5` | Env cible           |
-| `-u, --user`         | `ubuntu`       | User SSH            |
-| `-a, --auto-approve` | off            | Pas de confirmation |
+| Option               | Défaut         | Description                                           |
+| -------------------- | -------------- | ----------------------------------------------------- |
+| `-e, --env`          | `sandbox-sbg5` | Env cible                                             |
+| `-u, --user`         | `ubuntu`       | User SSH                                              |
+| `-a, --auto-approve` | off            | Pas de confirmation (deploy/destroy)                  |
+| `-t, --timeout`      | `5m`           | Timeout pour `wait-nodes` (ex: `10m`, `300s`)         |
+| `--with-demo`        | off            | Déploie aussi la démo (uniquement avec `full-deploy`) |
 
 ### 9.3 Fonctionnement interne
 
-- **Auto-init** : `deploy` lance `terraform init` si `.terraform/` absent
-- **Détachement routeur** : `destroy` détecte la présence d'une VM (via output `vm_name`) et détache l'interface routeur OVH avant le `terraform destroy` (contournement d'une limitation OVHcloud)
-- **Outputs intelligents** : les commandes `ssh`/`kubeconfig` détectent les outputs `null` et affichent un message d'erreur explicite si le workload n'est pas activé
-- **Démo K8s** : `deploy-demo` utilise automatiquement le `kubeconfig.yaml` généré par Terraform
+- **Sourcing openrc automatique** : avant chaque opération Terraform (`init`, `plan`, `deploy`, `destroy`), `infra.sh` détecte la région cible (priorité : `terraform.tfvars` > nom de l'env, ex `*par*` → PAR, `*sbg*` → SBG) et source le bon `openrc_<REGION>.sh`. Plus besoin de le faire à la main. Si le fichier est absent, warning + continue (l'utilisateur peut avoir ses propres `OS_*` exportées). Voir [ADR 0004](docs/adr/0004-strategie-openrc-par-region.md).
+- **Auto-init** : `deploy` lance `terraform init` si `.terraform/` absent.
+- **Détachement routeur** : `destroy` détecte la présence d'une VM (via output `vm_name`) et détache l'interface routeur OVH avant le `terraform destroy` (contournement d'une limitation OVHcloud). Cette étape utilise le client `openstack` ; les credentials sont déjà disponibles grâce au sourcing automatique fait en début de `cmd_destroy`.
+- **Outputs intelligents** : les commandes `ssh`/`kubeconfig`/`wait-nodes` détectent les outputs `null` et affichent un message d'erreur explicite si le workload n'est pas activé.
+- **Wait LB sur deploy-demo** : après `kubectl apply`, `infra.sh` attend le `rollout status` (timeout 2min), boucle sur l'IP publique du LoadBalancer (timeout 3min, polling 5s) et lance `curl -sfI` sur l'IP obtenue pour confirmer le succès.
+- **Démo K8s** : `deploy-demo` utilise automatiquement le `kubeconfig.yaml` généré par Terraform.
 
 ---
 
@@ -474,17 +548,27 @@ cd ../..
 ```bash
 cd envs/mks-sandbox-par
 cp terraform.tfvars.dist terraform.tfvars
-# Éditer : ovh_*_key, ovh_service_name
+# Éditer : ovh_*_key, ovh_service_name, os_tenant_id, os_tenant_name, os_username, os_password
+# (les os_* sont requis car l'env appelle le module network pour le subnet privé)
 cd ../..
 
-./infra.sh deploy -e mks-sandbox-par     # 5-10 min
-./infra.sh output -e mks-sandbox-par     # voir les détails
+# OPTION 1 — tout en une commande (recommandé) :
+./infra.sh full-deploy -e mks-sandbox-par --with-demo
+# → apply → wait-nodes Ready → deploy-demo → wait LB → curl test → verify
+# → URL finale affichée à la fin
+
+# OPTION 2 — étapes séparées (debug ou contrôle fin) :
+./infra.sh deploy        -e mks-sandbox-par     # 5-10 min
+./infra.sh wait-nodes    -e mks-sandbox-par     # attend Ready
+./infra.sh deploy-demo   -e mks-sandbox-par     # déploie + wait LB + test HTTP
+./infra.sh verify        -e mks-sandbox-par     # récap final
 ```
 
 Après le deploy :
 
 - `kubeconfig.yaml` est écrit automatiquement dans `envs/mks-sandbox-par/`
 - `./infra.sh kubeconfig -e mks-sandbox-par` donne la commande `export` à utiliser
+- Le bon `openrc_PAR.sh` est sourcé automatiquement (cf. § 9.3)
 
 ### 10.3 Déploiement flexible (sandbox-par)
 
@@ -553,16 +637,16 @@ kubectl get pods --all-namespaces
 En région **3AZ (Paris `EU-WEST-PAR`)** :
 
 - Le **control plane** est automatiquement HA sur les 3 AZ
-- Les **workers** sont distribués par OVH sur les AZ disponibles
-- `anti_affinity=true` garantit des hyperviseurs différents (et donc des AZ différentes quand possible)
+- Les **workers** sont distribués par OVH sur les AZ disponibles (anti-affinité gérée implicitement côté provider OVH, sans variable Terraform exposée)
+- `az_count` dimensionne le node pool (1/2/3) — la répartition physique sur les hyperviseurs/AZ relève du scheduler OVHcloud
 
-| `az_count` | `anti_affinity` |     Total nodes      | Usage                           |
-| :--------: | :-------------: | :------------------: | ------------------------------- |
-|    `1`     |     `false`     |   `nodes_per_pool`   | Mono-AZ, cluster petit/dev      |
-|    `2`     |     `true`      | `2 × nodes_per_pool` | Bi-AZ (défaut) — **recommandé** |
-|    `3`     |     `true`      | `3 × nodes_per_pool` | Tri-AZ, HA max                  |
+| `az_count` |     Total nodes      | Usage                           |
+| :--------: | :------------------: | ------------------------------- |
+|    `1`     |   `nodes_per_pool`   | Mono-AZ, cluster petit/dev      |
+|    `2`     | `2 × nodes_per_pool` | Bi-AZ (défaut) — **recommandé** |
+|    `3`     | `3 × nodes_per_pool` | Tri-AZ, HA max                  |
 
-> **Note** : `az_count` est un contrôle **logique** côté Terraform qui dimensionne le pool. La répartition physique sur les AZ est gérée par le scheduler OVHcloud via `anti_affinity`.
+> **Note** : `az_count` est un contrôle **logique** Terraform qui pilote le sizing du pool. Aucune variable n'expose les noms d'AZ ni l'anti-affinité au niveau du module — ces aspects sont gérés en interne par OVH MKS (en région 3AZ, OVH garantit la distribution sur des hyperviseurs distincts).
 
 ### 11.3 Kubeconfig local
 
@@ -590,17 +674,37 @@ api_allowed_cidrs = ["203.0.113.42/32", "198.51.100.0/24"]
 
 ### 11.5 Private network (réseau privé)
 
-Non activé par défaut. Pour attacher le cluster à un réseau privé OVHcloud (via une Gateway) :
+Le module accepte deux variables liées au réseau privé :
+
+- `private_network_id` : ID du réseau privé OVH
+- `nodes_subnet_id` : ID du subnet OpenStack où seront placés les nodes
+
+**Caractère obligatoire selon la région** :
+
+| Région                     | `private_network_id` | `nodes_subnet_id` |
+| -------------------------- | -------------------- | ----------------- |
+| Mono-AZ (`SBG5`, `GRA`, …) | optionnel            | optionnel         |
+| 3AZ (`EU-WEST-PAR`)        | **obligatoire**      | **obligatoire**   |
+
+**Provisionnement minimal en 3AZ** : l'env `mks-sandbox-par` appelle le module `network` en mode minimal (tous les flags `enable_*` à `false`), puis passe `module.network.network_id` et `module.network.subnet_id` au module `mks` :
 
 ```hcl
+module "network" {
+  source = "../../modules/network"
+  # ...
+  enable_router   = false
+  enable_secgroup = false
+  enable_keypair  = false
+  subnet_cidr     = var.subnet_cidr  # ex: 10.200.1.0/24
+}
+
 module "mks" {
   source             = "../../modules/mks"
-  private_network_id = openstack_networking_network_v2.private.id
+  private_network_id = module.network.network_id
+  nodes_subnet_id    = module.network.subnet_id
   # ...
 }
 ```
-
-Cette fonctionnalité nécessite une **Gateway OVHcloud** (ressource payante, non couverte par ce module en v1).
 
 ---
 
@@ -671,13 +775,17 @@ Démontrer visuellement la répartition multi-AZ : une page web affichée dans l
 
 ```bash
 ./infra.sh deploy-demo -e mks-sandbox-par
-
-# Patienter 1-2 min que le LB soit provisionné
-kubectl get svc zone-demo
-# → Récupérer EXTERNAL-IP
-
-# Ouvrir http://<EXTERNAL-IP> et rafraîchir plusieurs fois
 ```
+
+`infra.sh` enchaîne automatiquement :
+
+1. `kubectl apply -f examples/k8s-multi-az-demo/` (RBAC + ConfigMap + Deployment + Service)
+2. `kubectl rollout status deployment/zone-demo --timeout=2m`
+3. Boucle d'attente sur l'IP publique du LoadBalancer (timeout 3min, polling 5s)
+4. `curl -sfI http://<EXTERNAL-IP>` pour valider la disponibilité HTTP
+5. Affiche l'URL finale prête à ouvrir dans un navigateur
+
+Si tu préfères orchestrer toi-même : `kubectl apply` + `kubectl get svc zone-demo` (boucler jusqu'à voir l'EXTERNAL-IP) + ouvrir l'URL.
 
 ### 12.6 Suppression
 
@@ -707,12 +815,21 @@ Le script détecte la présence d'une VM (via l'output `vm_name`) et détache l'
 
 ### 13.3 Ordre de destruction (MKS)
 
-```
-1. ./infra.sh destroy-demo -e <env>   # supprimer les manifestes K8s (+ LB)
-2. ./infra.sh destroy     -e <env>    # détruire le cluster MKS
+Pour un cluster MKS avec démo déployée, **ne pas inverser** l'ordre — sinon le LB Octavia créé par le `Service type=LoadBalancer` reste orphelin côté OVHcloud (et continue à être facturé).
+
+#### Option 1 — En une commande (recommandé)
+
+```bash
+./infra.sh full-destroy -e <env>
+# → destroy-demo (si présent, en ignorant les erreurs) → tf destroy auto-approve
 ```
 
-Ne pas inverser — sinon le LB Octavia créé par le `Service type=LoadBalancer` reste orphelin côté OVHcloud.
+#### Option 2 — Étapes séparées
+
+```bash
+1. ./infra.sh destroy-demo -e <env>   # supprime les manifestes K8s (+ LB Octavia)
+2. ./infra.sh destroy      -e <env>   # détruit le cluster MKS
+```
 
 ---
 
@@ -741,13 +858,18 @@ Le fichier `cloud-init.yaml` (dans les envs avec VM) est passé comme `user_data
 
 ### 15.1 Erreurs Terraform
 
-| Erreur                                            | Cause                      | Solution                                      |
-| ------------------------------------------------- | -------------------------- | --------------------------------------------- |
-| `No suitable endpoint for network service in SBG` | Mauvaise région            | Utiliser `SBG5`                               |
-| `ExternalGatewayForFloatingIPNotFound`            | Interface routeur détachée | `./infra.sh destroy` puis `./infra.sh deploy` |
-| `RouterInUse (409)` au destroy                    | Ports OVH résiduels        | Utiliser `./infra.sh destroy`                 |
-| `Unsupported argument: availability_zones`        | Provider OVH < 0.51        | `terraform init -upgrade`                     |
-| `failed to generate fingerprint`                  | Mauvaise clé SSH           | Passer le contenu direct (pas le chemin)      |
+| Erreur                                            | Cause                                                 | Solution                                                      |
+| ------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| `No suitable endpoint for network service in SBG` | Mauvaise région                                       | Utiliser `SBG5`                                               |
+| `ExternalGatewayForFloatingIPNotFound`            | Interface routeur détachée                            | `./infra.sh destroy` puis `./infra.sh deploy`                 |
+| `RouterInUse (409)` au destroy                    | Ports OVH résiduels                                   | Utiliser `./infra.sh destroy`                                 |
+| `Unsupported argument: availability_zones`        | Provider OVH < 0.51                                   | `terraform init -upgrade`                                     |
+| `failed to generate fingerprint`                  | Mauvaise clé SSH                                      | Passer le contenu direct (pas le chemin)                      |
+| `Inconsistent dependency lock file`               | Contraintes versions module ↔ env incompatibles       | Aligner `versions.tf`, `terraform init -upgrade` (ADR 0005)   |
+| `plan is not compatible with this region`         | Plan Discovery sur région 3AZ (PAR)                   | Upgrade plan en Essentials dans le Manager OVH (ADR 0006)     |
+| `404` sur appels API OVH                          | `ovh_service_name` = nom friendly au lieu de l'ID hex | Utiliser l'ID hex 32 chars du tenant (URL Manager)            |
+| MKS create : `nodes_subnet_id required`           | Région 3AZ sans subnet fourni                         | Ajouter `private_network_id` + `nodes_subnet_id` (cf. § 11.5) |
+| `openrc absent` (warning)                         | Pas de `openrc_<REGION>.sh` à la racine               | Télécharger depuis Manager OVH et renommer (cf. § 8.5)        |
 
 ### 15.2 Erreurs Nginx / cloud-init
 
@@ -830,6 +952,23 @@ Pour `az_count=3` : +18 €/mois (1 worker de plus) = ~66 €/mois.
 | **GitOps (ArgoCD/Flux)**            | Déploiement continu des manifestes K8s                              | Moyenne    |
 | **Ansible**                         | Remplacer cloud-init par Ansible pour les VMs                       | Moyenne    |
 | **Multi-VM + LB Octavia Terraform** | Déployer un cluster HA de VMs via LB                                | Élevée     |
+
+---
+
+## 18. Décisions d'architecture (ADR)
+
+Les décisions techniques structurantes du projet sont documentées dans `docs/adr/` au format Michael Nygard étendu (Status / Contexte / Options / Décision / Conséquences / Alternatives non explorées / Références croisées).
+
+| ADR                                                                      | Décision                                                  |
+| ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| [0001](docs/adr/0001-managed-kubernetes-vs-self-managed.md)              | Choix de Managed Kubernetes (MKS) plutôt que self-managed |
+| [0002](docs/adr/0002-structure-environnements-dedies-vs-flexible.md)     | Structure des environnements : dédiés + flexible          |
+| [0003](docs/adr/0003-feature-flags-module-network.md)                    | Feature flags dans le module network                      |
+| [0004](docs/adr/0004-strategie-openrc-par-region.md)                     | Stratégie openrc séparée par région OVHcloud              |
+| [0005](docs/adr/0005-versions-providers-modules-souples-envs-stricts.md) | Versions providers : modules souples, envs stricts        |
+| [0006](docs/adr/0006-choix-region-paris-3az-vs-sbg-mono-az.md)           | Choix de région : Paris 3AZ vs SBG mono-AZ                |
+
+Pour ajouter un nouvel ADR : créer `docs/adr/NNNN-titre-en-kebab-case.md` avec un statut `proposed` puis `accepted` après validation. Une fois `accepted`, l'ADR est immutable — pour le changer, écrire un nouvel ADR qui le supersede.
 
 ---
 
