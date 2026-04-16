@@ -9,16 +9,16 @@ output "subnet_id" {
 }
 
 output "secgroup_id" {
-  description = "ID du security group"
-  value       = openstack_networking_secgroup_v2.this.id
+  description = "ID du security group (null si enable_secgroup = false)"
+  value       = var.enable_secgroup ? openstack_networking_secgroup_v2.this[0].id : null
 }
 
 output "keypair_name" {
-  description = "Nom de la keypair SSH"
-  value       = openstack_compute_keypair_v2.this.name
+  description = "Nom de la keypair SSH (null si enable_keypair = false)"
+  value       = var.enable_keypair ? openstack_compute_keypair_v2.this[0].name : null
 }
 
 output "router_id" {
-  description = "ID du routeur"
-  value       = openstack_networking_router_v2.this.id
+  description = "ID du routeur (null si enable_router = false)"
+  value       = var.enable_router ? openstack_networking_router_v2.this[0].id : null
 }
