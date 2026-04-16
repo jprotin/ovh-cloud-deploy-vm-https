@@ -54,6 +54,21 @@ tf_output_raw() {
   terraform -chdir="$dir" output -raw "$name" 2>/dev/null || echo ""
 }
 
+# Résout kubeconfig_path en chemin absolu, tolère output hérité en relatif
+resolve_kubeconfig() {
+  local dir="$1"
+  local raw
+  raw=$(tf_output_raw "$dir" "kubeconfig_path")
+  if [ -z "$raw" ] || [ "$raw" = "null" ]; then
+    echo ""
+    return
+  fi
+  case "$raw" in
+    /*) echo "$raw" ;;
+    *) realpath -m "$dir/$raw" ;;
+  esac
+}
+
 # Détecte la région cible d'un env (priorité : terraform.tfvars > nom de l'env)
 detect_region() {
   local env="$1"
@@ -292,7 +307,7 @@ cmd_wait_nodes() {
 
   local dir kubeconfig
   dir="$(env_dir "$env")"
-  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$dir")
 
   if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
     error "Aucun cluster MKS dans l'env '$env'."
@@ -318,7 +333,7 @@ cmd_verify() {
   terraform -chdir="$dir" output 2>/dev/null || warn "Aucun output (env non déployé ?)"
 
   local kubeconfig
-  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$dir")
   if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ] && [ -f "$kubeconfig" ]; then
     echo ""
     info "${BOLD}=== Nodes Kubernetes ===${NC}"
@@ -346,7 +361,7 @@ cmd_kubeconfig() {
   dir="$(env_dir "$env")"
 
   local kubeconfig
-  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$dir")
 
   if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
     error "Aucun cluster MKS déployé dans l'environnement '$env'."
@@ -354,18 +369,15 @@ cmd_kubeconfig() {
     exit 1
   fi
 
-  local abs_path
-  abs_path=$(cd "$(dirname "$kubeconfig")" && pwd)/$(basename "$kubeconfig")
-
-  if [ ! -f "$abs_path" ]; then
-    error "Le fichier kubeconfig n'existe pas : $abs_path"
+  if [ ! -f "$kubeconfig" ]; then
+    error "Le fichier kubeconfig n'existe pas : $kubeconfig"
     error "Déploie d'abord le cluster : ./infra.sh deploy -e $env"
     exit 1
   fi
 
   info "Kubeconfig pour ${BOLD}$env${NC} :"
   echo ""
-  echo "  ${BOLD}export KUBECONFIG=$abs_path${NC}"
+  echo "  ${BOLD}export KUBECONFIG=$kubeconfig${NC}"
   echo ""
   info "Ou en une ligne (à évaluer) :"
   echo ""
@@ -381,7 +393,7 @@ cmd_deploy_demo() {
   dir="$(env_dir "$env")"
 
   local kubeconfig
-  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$dir")
 
   if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
     error "Aucun cluster MKS déployé dans l'environnement '$env'."
@@ -465,7 +477,7 @@ cmd_full_deploy() {
   cmd_deploy "$env" "true"
 
   local kubeconfig
-  kubeconfig=$(tf_output_raw "$(env_dir "$env")" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$(env_dir "$env")")
   if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ]; then
     echo ""
     info "${BOLD}=== Étape 2 : attente nodes Ready ===${NC}"
@@ -491,7 +503,7 @@ cmd_full_destroy() {
   check_env "$env"
 
   local kubeconfig
-  kubeconfig=$(tf_output_raw "$(env_dir "$env")" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$(env_dir "$env")")
   if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ] && [ -f "$kubeconfig" ]; then
     info "${BOLD}=== Étape 1 : suppression démo (si présente) ===${NC}"
     cmd_destroy_demo "$env" || warn "destroy-demo a échoué (on continue)"
@@ -513,7 +525,7 @@ cmd_destroy_demo() {
   dir="$(env_dir "$env")"
 
   local kubeconfig
-  kubeconfig=$(tf_output_raw "$dir" "kubeconfig_path")
+  kubeconfig=$(resolve_kubeconfig "$dir")
 
   if [ -z "$kubeconfig" ] || [ "$kubeconfig" = "null" ]; then
     error "Aucun cluster MKS déployé dans l'environnement '$env'."
