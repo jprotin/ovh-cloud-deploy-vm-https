@@ -231,6 +231,42 @@ install_kubectl() {
 }
 
 # -------------------------------------------------------
+# Vérification : jq (parsing JSON outputs kubectl)
+# -------------------------------------------------------
+check_jq() {
+  echo ""
+  info "Vérification de jq..."
+
+  if command -v jq &>/dev/null; then
+    ok "jq $(jq --version 2>/dev/null | sed 's/jq-//')"
+  else
+    install "jq non trouvé, installation en cours..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq jq
+    ACTIONS_DONE=$((ACTIONS_DONE + 1))
+    ok "jq installé"
+  fi
+}
+
+# -------------------------------------------------------
+# Vérification : curl (test HTTP des LoadBalancers)
+# -------------------------------------------------------
+check_curl() {
+  echo ""
+  info "Vérification de curl..."
+
+  if command -v curl &>/dev/null; then
+    ok "curl $(curl --version 2>/dev/null | head -1 | awk '{print $2}')"
+  else
+    install "curl non trouvé, installation en cours..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq curl
+    ACTIONS_DONE=$((ACTIONS_DONE + 1))
+    ok "curl installé"
+  fi
+}
+
+# -------------------------------------------------------
 # Vérification : Clé SSH
 # -------------------------------------------------------
 check_ssh_key() {
@@ -304,6 +340,8 @@ check_terraform
 check_openstack
 check_git
 check_kubectl
+check_jq
+check_curl
 check_ssh_key
 check_tfvars
 check_terraform_init

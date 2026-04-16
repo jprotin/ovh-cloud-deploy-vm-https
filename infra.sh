@@ -417,6 +417,29 @@ cmd_deploy_demo() {
   ok "Démo déployée — URL : ${BOLD}http://${ext_ip}${NC}"
 }
 
+cmd_doctor() {
+  echo ""
+  info "${BOLD}=== Check des prérequis ===${NC}"
+  local missing=0
+  for tool in terraform kubectl openstack jq curl; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      local v
+      v=$("$tool" --version 2>&1 | head -1)
+      ok "$tool : $v"
+    else
+      error "$tool : non installé"
+      missing=$((missing + 1))
+    fi
+  done
+  echo ""
+  if [ "$missing" -eq 0 ]; then
+    ok "Tous les prérequis sont présents"
+  else
+    error "$missing outil(s) manquant(s) — relance _init-project/setup.sh"
+    exit 1
+  fi
+}
+
 cmd_full_deploy() {
   local env="$1"
   local with_demo="$2"
@@ -556,6 +579,7 @@ case "$COMMAND" in
   destroy-demo) cmd_destroy_demo "$ENV" ;;
   full-deploy) cmd_full_deploy "$ENV" "$WITH_DEMO" ;;
   full-destroy) cmd_full_destroy "$ENV" ;;
+  doctor) cmd_doctor ;;
   envs) list_envs ;;
   -h | --help | help)
     usage
