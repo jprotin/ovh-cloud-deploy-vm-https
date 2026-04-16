@@ -417,6 +417,55 @@ cmd_deploy_demo() {
   ok "Démo déployée — URL : ${BOLD}http://${ext_ip}${NC}"
 }
 
+cmd_full_deploy() {
+  local env="$1"
+  local with_demo="$2"
+  check_env "$env"
+
+  info "${BOLD}=== Étape 1 : terraform apply ===${NC}"
+  cmd_deploy "$env" "true"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$(env_dir "$env")" "kubeconfig_path")
+  if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ]; then
+    echo ""
+    info "${BOLD}=== Étape 2 : attente nodes Ready ===${NC}"
+    cmd_wait_nodes "$env" "5m"
+
+    if [ "$with_demo" = "true" ]; then
+      echo ""
+      info "${BOLD}=== Étape 3 : déploiement démo ===${NC}"
+      cmd_deploy_demo "$env"
+    fi
+  fi
+
+  echo ""
+  info "${BOLD}=== Étape finale : verify ===${NC}"
+  cmd_verify "$env"
+
+  echo ""
+  ok "${BOLD}full-deploy terminé pour '$env'${NC}"
+}
+
+cmd_full_destroy() {
+  local env="$1"
+  check_env "$env"
+
+  local kubeconfig
+  kubeconfig=$(tf_output_raw "$(env_dir "$env")" "kubeconfig_path")
+  if [ -n "$kubeconfig" ] && [ "$kubeconfig" != "null" ] && [ -f "$kubeconfig" ]; then
+    info "${BOLD}=== Étape 1 : suppression démo (si présente) ===${NC}"
+    cmd_destroy_demo "$env" || warn "destroy-demo a échoué (on continue)"
+    echo ""
+  fi
+
+  info "${BOLD}=== Étape 2 : terraform destroy ===${NC}"
+  cmd_destroy "$env" "true"
+
+  echo ""
+  ok "${BOLD}full-destroy terminé pour '$env'${NC}"
+}
+
 cmd_destroy_demo() {
   local env="$1"
   check_env "$env"
@@ -453,6 +502,7 @@ ENV="$DEFAULT_ENV"
 USER_SSH="ubuntu"
 AUTO_APPROVE="false"
 TIMEOUT="5m"
+WITH_DEMO="false"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -471,6 +521,10 @@ while [ $# -gt 0 ]; do
     -t | --timeout)
       TIMEOUT="$2"
       shift 2
+      ;;
+    --with-demo)
+      WITH_DEMO="true"
+      shift
       ;;
     -h | --help)
       usage
@@ -500,6 +554,8 @@ case "$COMMAND" in
   verify) cmd_verify "$ENV" ;;
   deploy-demo) cmd_deploy_demo "$ENV" ;;
   destroy-demo) cmd_destroy_demo "$ENV" ;;
+  full-deploy) cmd_full_deploy "$ENV" "$WITH_DEMO" ;;
+  full-destroy) cmd_full_destroy "$ENV" ;;
   envs) list_envs ;;
   -h | --help | help)
     usage
