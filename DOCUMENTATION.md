@@ -27,6 +27,7 @@
 15. [Dépannage](#15-dépannage)
 16. [Estimation des coûts](#16-estimation-des-coûts)
 17. [Évolutions possibles](#17-évolutions-possibles)
+18. [Décisions d'architecture (ADR)](#18-décisions-darchitecture-adr)
 
 ---
 
@@ -75,6 +76,10 @@ cat ~/.ssh/id_ed25519.pub   # Contenu à coller dans terraform.tfvars
 | python-openstackclient | >= 6.0      | `openstack --version`      |
 | kubectl                | >= 1.28     | `kubectl version --client` |
 | Git                    | >= 2.34     | `git --version`            |
+| jq                     | toute       | `jq --version`             |
+| curl                   | toute       | `curl --version`           |
+
+> Astuce : `./infra.sh doctor` vérifie tous les prérequis en une commande (sans installation).
 
 ---
 
@@ -94,9 +99,11 @@ Le script `_init-project/setup.sh` automatise l'installation des prérequis.
 | 2     | python-openstackclient | >= 6.0.0    | Installation via `apt`                       |
 | 3     | Git                    | >= 2.34.0   | Installation via `apt`                       |
 | 4     | kubectl                | >= 1.28.0   | Installation via dépôt Kubernetes officiel   |
-| 5     | Clé SSH                | —           | Affiche les instructions de génération       |
-| 6     | terraform.tfvars       | —           | Affiche les instructions de création         |
-| 7     | terraform init         | —           | Lance `terraform init` dans l'env par défaut |
+| 5     | jq                     | toute       | Installation via `apt`                       |
+| 6     | curl                   | toute       | Installation via `apt`                       |
+| 7     | Clé SSH                | —           | Affiche les instructions de génération       |
+| 8     | terraform.tfvars       | —           | Affiche les instructions de création         |
+| 9     | terraform init         | —           | Lance `terraform init` dans l'env par défaut |
 
 Si tout est déjà en place, le script affiche "Ton environnement est déjà prêt."
 
@@ -230,10 +237,14 @@ Ce projet fournit une **landing zone IaC** modulaire pour OVHcloud Public Cloud,
 ├── examples/
 │   └── k8s-multi-az-demo/        # Manifestes démo (RBAC, ConfigMap, Deployment, Service)
 │
+├── docs/
+│   ├── adr/                      # Architecture Decision Records (cf. § 18)
+│   └── runbooks/                 # Procédures d'exploitation (à venir)
+│
 ├── _init-project/
 │   └── setup.sh                  # Installation prérequis
-├── infra.sh                      # CLI unifiée
-├── destroy.sh                    # Legacy (remplacé par infra.sh destroy)
+├── infra.sh                      # CLI unifiée (deploy, destroy, ssh, kubeconfig, full-deploy, verify, doctor...)
+├── destroy.sh                    # Legacy (remplacé par infra.sh destroy / full-destroy)
 ├── README.md                     # Doc rapide
 └── DOCUMENTATION.md              # Ce fichier
 ```
@@ -400,7 +411,25 @@ Générer sur <https://www.ovh.com/auth/api/createToken> avec les droits :
 
 Visible dans l'URL de ton projet Public Cloud : `https://www.ovh.com/manager/#/public-cloud/pci/projects/<SERVICE_NAME>`.
 
+C'est un **ID hex de 32 caractères**, pas le nom friendly du projet. L'utilisation du nom friendly renvoie un 404 sur les appels API.
+
 Cette valeur est requise pour **MKS** (variable `ovh_service_name`).
+
+### 8.5 openrc par région OVHcloud
+
+Sur OVHcloud Public Cloud, **chaque région a ses propres credentials OpenStack**. Le projet attend un fichier `openrc_<REGION>.sh` par région utilisée :
+
+- `openrc_PAR.sh` pour les déploiements en région Paris (`EU-WEST-PAR`)
+- `openrc_SBG.sh` pour les déploiements en région Strasbourg (`SBG5`)
+- `openrc_<XXX>.sh` pour toute autre région
+
+Téléchargement : Manager OVH → Public Cloud → Users & Roles → cliquer sur l'utilisateur → onglet OpenRC → Download → renommer le fichier suivant la convention ci-dessus, à la racine du projet.
+
+Ces fichiers contiennent un mot de passe en clair, ils sont **automatiquement gitignorés** (pattern `openrc*.sh`).
+
+`infra.sh` source le bon fichier automatiquement avant chaque opération Terraform — pas besoin de `source openrc.sh` à la main. Si le fichier est absent : warning + continue (l'utilisateur peut avoir ses propres `OS_*` exportées dans son shell).
+
+Détails dans [ADR 0004](docs/adr/0004-strategie-openrc-par-region.md).
 
 ### 8.4 terraform.tfvars (exemple complet pour sandbox-par)
 
@@ -644,17 +673,37 @@ api_allowed_cidrs = ["203.0.113.42/32", "198.51.100.0/24"]
 
 ### 11.5 Private network (réseau privé)
 
-Non activé par défaut. Pour attacher le cluster à un réseau privé OVHcloud (via une Gateway) :
+Le module accepte deux variables liées au réseau privé :
+
+- `private_network_id` : ID du réseau privé OVH
+- `nodes_subnet_id` : ID du subnet OpenStack où seront placés les nodes
+
+**Caractère obligatoire selon la région** :
+
+| Région                     | `private_network_id` | `nodes_subnet_id` |
+| -------------------------- | -------------------- | ----------------- |
+| Mono-AZ (`SBG5`, `GRA`, …) | optionnel            | optionnel         |
+| 3AZ (`EU-WEST-PAR`)        | **obligatoire**      | **obligatoire**   |
+
+**Provisionnement minimal en 3AZ** : l'env `mks-sandbox-par` appelle le module `network` en mode minimal (tous les flags `enable_*` à `false`), puis passe `module.network.network_id` et `module.network.subnet_id` au module `mks` :
 
 ```hcl
+module "network" {
+  source = "../../modules/network"
+  # ...
+  enable_router   = false
+  enable_secgroup = false
+  enable_keypair  = false
+  subnet_cidr     = var.subnet_cidr  # ex: 10.200.1.0/24
+}
+
 module "mks" {
   source             = "../../modules/mks"
-  private_network_id = openstack_networking_network_v2.private.id
+  private_network_id = module.network.network_id
+  nodes_subnet_id    = module.network.subnet_id
   # ...
 }
 ```
-
-Cette fonctionnalité nécessite une **Gateway OVHcloud** (ressource payante, non couverte par ce module en v1).
 
 ---
 
@@ -725,13 +774,17 @@ Démontrer visuellement la répartition multi-AZ : une page web affichée dans l
 
 ```bash
 ./infra.sh deploy-demo -e mks-sandbox-par
-
-# Patienter 1-2 min que le LB soit provisionné
-kubectl get svc zone-demo
-# → Récupérer EXTERNAL-IP
-
-# Ouvrir http://<EXTERNAL-IP> et rafraîchir plusieurs fois
 ```
+
+`infra.sh` enchaîne automatiquement :
+
+1. `kubectl apply -f examples/k8s-multi-az-demo/` (RBAC + ConfigMap + Deployment + Service)
+2. `kubectl rollout status deployment/zone-demo --timeout=2m`
+3. Boucle d'attente sur l'IP publique du LoadBalancer (timeout 3min, polling 5s)
+4. `curl -sfI http://<EXTERNAL-IP>` pour valider la disponibilité HTTP
+5. Affiche l'URL finale prête à ouvrir dans un navigateur
+
+Si tu préfères orchestrer toi-même : `kubectl apply` + `kubectl get svc zone-demo` (boucler jusqu'à voir l'EXTERNAL-IP) + ouvrir l'URL.
 
 ### 12.6 Suppression
 
@@ -804,13 +857,18 @@ Le fichier `cloud-init.yaml` (dans les envs avec VM) est passé comme `user_data
 
 ### 15.1 Erreurs Terraform
 
-| Erreur                                            | Cause                      | Solution                                      |
-| ------------------------------------------------- | -------------------------- | --------------------------------------------- |
-| `No suitable endpoint for network service in SBG` | Mauvaise région            | Utiliser `SBG5`                               |
-| `ExternalGatewayForFloatingIPNotFound`            | Interface routeur détachée | `./infra.sh destroy` puis `./infra.sh deploy` |
-| `RouterInUse (409)` au destroy                    | Ports OVH résiduels        | Utiliser `./infra.sh destroy`                 |
-| `Unsupported argument: availability_zones`        | Provider OVH < 0.51        | `terraform init -upgrade`                     |
-| `failed to generate fingerprint`                  | Mauvaise clé SSH           | Passer le contenu direct (pas le chemin)      |
+| Erreur                                            | Cause                                                 | Solution                                                      |
+| ------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
+| `No suitable endpoint for network service in SBG` | Mauvaise région                                       | Utiliser `SBG5`                                               |
+| `ExternalGatewayForFloatingIPNotFound`            | Interface routeur détachée                            | `./infra.sh destroy` puis `./infra.sh deploy`                 |
+| `RouterInUse (409)` au destroy                    | Ports OVH résiduels                                   | Utiliser `./infra.sh destroy`                                 |
+| `Unsupported argument: availability_zones`        | Provider OVH < 0.51                                   | `terraform init -upgrade`                                     |
+| `failed to generate fingerprint`                  | Mauvaise clé SSH                                      | Passer le contenu direct (pas le chemin)                      |
+| `Inconsistent dependency lock file`               | Contraintes versions module ↔ env incompatibles       | Aligner `versions.tf`, `terraform init -upgrade` (ADR 0005)   |
+| `plan is not compatible with this region`         | Plan Discovery sur région 3AZ (PAR)                   | Upgrade plan en Essentials dans le Manager OVH (ADR 0006)     |
+| `404` sur appels API OVH                          | `ovh_service_name` = nom friendly au lieu de l'ID hex | Utiliser l'ID hex 32 chars du tenant (URL Manager)            |
+| MKS create : `nodes_subnet_id required`           | Région 3AZ sans subnet fourni                         | Ajouter `private_network_id` + `nodes_subnet_id` (cf. § 11.5) |
+| `openrc absent` (warning)                         | Pas de `openrc_<REGION>.sh` à la racine               | Télécharger depuis Manager OVH et renommer (cf. § 8.5)        |
 
 ### 15.2 Erreurs Nginx / cloud-init
 
@@ -893,6 +951,23 @@ Pour `az_count=3` : +18 €/mois (1 worker de plus) = ~66 €/mois.
 | **GitOps (ArgoCD/Flux)**            | Déploiement continu des manifestes K8s                              | Moyenne    |
 | **Ansible**                         | Remplacer cloud-init par Ansible pour les VMs                       | Moyenne    |
 | **Multi-VM + LB Octavia Terraform** | Déployer un cluster HA de VMs via LB                                | Élevée     |
+
+---
+
+## 18. Décisions d'architecture (ADR)
+
+Les décisions techniques structurantes du projet sont documentées dans `docs/adr/` au format Michael Nygard étendu (Status / Contexte / Options / Décision / Conséquences / Alternatives non explorées / Références croisées).
+
+| ADR                                                                      | Décision                                                  |
+| ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| [0001](docs/adr/0001-managed-kubernetes-vs-self-managed.md)              | Choix de Managed Kubernetes (MKS) plutôt que self-managed |
+| [0002](docs/adr/0002-structure-environnements-dedies-vs-flexible.md)     | Structure des environnements : dédiés + flexible          |
+| [0003](docs/adr/0003-feature-flags-module-network.md)                    | Feature flags dans le module network                      |
+| [0004](docs/adr/0004-strategie-openrc-par-region.md)                     | Stratégie openrc séparée par région OVHcloud              |
+| [0005](docs/adr/0005-versions-providers-modules-souples-envs-stricts.md) | Versions providers : modules souples, envs stricts        |
+| [0006](docs/adr/0006-choix-region-paris-3az-vs-sbg-mono-az.md)           | Choix de région : Paris 3AZ vs SBG mono-AZ                |
+
+Pour ajouter un nouvel ADR : créer `docs/adr/NNNN-titre-en-kebab-case.md` avec un statut `proposed` puis `accepted` après validation. Une fois `accepted`, l'ADR est immutable — pour le changer, écrire un nouvel ADR qui le supersede.
 
 ---
 
