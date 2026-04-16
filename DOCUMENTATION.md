@@ -497,10 +497,10 @@ mks_nodes_per_pool = 1
 
 #### Orchestration end-to-end
 
-| Commande       | Options                 | Rôle                                                                                       |
-| -------------- | ----------------------- | ------------------------------------------------------------------------------------------ |
-| `full-deploy`  | `-e env`, `--with-demo` | `deploy` (auto-approve) → `wait-nodes` → (option `--with-demo` : `deploy-demo`) → `verify` |
-| `full-destroy` | `-e env`                | `destroy-demo` (si présent) → `destroy` (auto-approve)                                     |
+| Commande       | Options                 | Rôle                                                                                                                           |
+| -------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `full-deploy`  | `-e env`, `--with-demo` | `deploy` (auto-approve) → `wait-nodes` → (option `--with-demo` : `deploy-demo`) → `verify`                                     |
+| `full-destroy` | `-e env`                | `destroy-demo` (si présent, avec attente libération LB Octavia) → `destroy` (auto-approve, pré-nettoie le router MKS résiduel) |
 
 #### Diagnostic
 
@@ -821,7 +821,11 @@ Pour un cluster MKS avec démo déployée, **ne pas inverser** l'ordre — sinon
 
 ```bash
 ./infra.sh full-destroy -e <env>
-# → destroy-demo (si présent, en ignorant les erreurs) → tf destroy auto-approve
+# Séquence :
+#  1. destroy-demo (si présent, en ignorant les erreurs)
+#  2. Si LB était présent : kubectl wait svc disparu + sleep 60s (marge Octavia)
+#  3. Pré-nettoyage auto du router Neutron k8s-cluster-<id> résiduel
+#  4. tf destroy auto-approve
 ```
 
 #### Option 2 — Étapes séparées
@@ -858,18 +862,18 @@ Le fichier `cloud-init.yaml` (dans les envs avec VM) est passé comme `user_data
 
 ### 15.1 Erreurs Terraform
 
-| Erreur                                            | Cause                                                 | Solution                                                      |
-| ------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------- |
-| `No suitable endpoint for network service in SBG` | Mauvaise région                                       | Utiliser `SBG5`                                               |
-| `ExternalGatewayForFloatingIPNotFound`            | Interface routeur détachée                            | `./infra.sh destroy` puis `./infra.sh deploy`                 |
-| `RouterInUse (409)` au destroy                    | Ports OVH résiduels                                   | Utiliser `./infra.sh destroy`                                 |
-| `Unsupported argument: availability_zones`        | Provider OVH < 0.51                                   | `terraform init -upgrade`                                     |
-| `failed to generate fingerprint`                  | Mauvaise clé SSH                                      | Passer le contenu direct (pas le chemin)                      |
-| `Inconsistent dependency lock file`               | Contraintes versions module ↔ env incompatibles       | Aligner `versions.tf`, `terraform init -upgrade` (ADR 0005)   |
-| `plan is not compatible with this region`         | Plan Discovery sur région 3AZ (PAR)                   | Upgrade plan en Essentials dans le Manager OVH (ADR 0006)     |
-| `404` sur appels API OVH                          | `ovh_service_name` = nom friendly au lieu de l'ID hex | Utiliser l'ID hex 32 chars du tenant (URL Manager)            |
-| MKS create : `nodes_subnet_id required`           | Région 3AZ sans subnet fourni                         | Ajouter `private_network_id` + `nodes_subnet_id` (cf. § 11.5) |
-| `openrc absent` (warning)                         | Pas de `openrc_<REGION>.sh` à la racine               | Télécharger depuis Manager OVH et renommer (cf. § 8.5)        |
+| Erreur                                            | Cause                                                 | Solution                                                            |
+| ------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------- |
+| `No suitable endpoint for network service in SBG` | Mauvaise région                                       | Utiliser `SBG5`                                                     |
+| `ExternalGatewayForFloatingIPNotFound`            | Interface routeur détachée                            | `./infra.sh destroy` puis `./infra.sh deploy`                       |
+| `RouterInUse (409)` au destroy                    | Ports OVH résiduels                                   | Géré auto : `./infra.sh destroy` pré-nettoie le router MKS résiduel |
+| `Unsupported argument: availability_zones`        | Provider OVH < 0.51                                   | `terraform init -upgrade`                                           |
+| `failed to generate fingerprint`                  | Mauvaise clé SSH                                      | Passer le contenu direct (pas le chemin)                            |
+| `Inconsistent dependency lock file`               | Contraintes versions module ↔ env incompatibles       | Aligner `versions.tf`, `terraform init -upgrade` (ADR 0005)         |
+| `plan is not compatible with this region`         | Plan Discovery sur région 3AZ (PAR)                   | Upgrade plan en Essentials dans le Manager OVH (ADR 0006)           |
+| `404` sur appels API OVH                          | `ovh_service_name` = nom friendly au lieu de l'ID hex | Utiliser l'ID hex 32 chars du tenant (URL Manager)                  |
+| MKS create : `nodes_subnet_id required`           | Région 3AZ sans subnet fourni                         | Ajouter `private_network_id` + `nodes_subnet_id` (cf. § 11.5)       |
+| `openrc absent` (warning)                         | Pas de `openrc_<REGION>.sh` à la racine               | Télécharger depuis Manager OVH et renommer (cf. § 8.5)              |
 
 ### 15.2 Erreurs Nginx / cloud-init
 
@@ -887,6 +891,8 @@ Le fichier `cloud-init.yaml` (dans les envs avec VM) est passé comme `user_data
 | `kubectl` → `Unable to connect to the server` | Mauvais kubeconfig                        | Recharger avec `eval $(./infra.sh kubeconfig -e <env> \| grep export)` |
 | Pods en `Pending` longtemps                   | Node pool pas encore prêt                 | `kubectl get nodes` — attendre que tous soient `Ready`                 |
 | Service LoadBalancer reste `<pending>`        | LB en cours de provisionnement            | Patienter 1-2 min                                                      |
+| URL LB timeout juste après deploy-demo        | FloatingIP Octavia pas encore routable    | Attendre 3-5 min après `EnsuredLoadBalancer` — propagation réseau OVH  |
+| Timeout 10 min sur subnet au destroy          | Router MKS résiduel `k8s-cluster-<id>`    | Géré auto par `cmd_destroy` depuis le fix de 2026-04-16                |
 | Après destroy : IP publique toujours facturée | LB Octavia orphelin                       | `openstack loadbalancer list` et supprimer manuellement                |
 
 ### 15.4 Commandes de diagnostic
