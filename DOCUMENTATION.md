@@ -244,19 +244,29 @@ Ce projet fournit une **landing zone IaC** modulaire pour OVHcloud Public Cloud,
 
 ### 6.1 Module `network`
 
-Ressources : réseau privé, subnet, routeur, security group (SSH/HTTP/HTTPS/ICMP), keypair.
+Ressources : réseau privé + subnet (toujours créés) ; routeur, security group (SSH/HTTP/HTTPS/ICMP), keypair (optionnels via feature flags).
 
-| Variable          | Défaut                         | Description            |
-| ----------------- | ------------------------------ | ---------------------- |
-| `project_name`    | —                              | Préfixe des ressources |
-| `region`          | —                              | Région OpenStack       |
-| `subnet_cidr`     | `10.0.1.0/24`                  | CIDR du subnet         |
-| `dns_nameservers` | `["213.186.33.99", "8.8.8.8"]` | DNS                    |
-| `ext_net_id`      | —                              | ID du réseau Ext-Net   |
-| `admin_cidr`      | —                              | CIDR autorisé SSH      |
-| `ssh_public_key`  | —                              | Clé publique SSH       |
+| Variable          | Défaut                         | Description                                         |
+| ----------------- | ------------------------------ | --------------------------------------------------- |
+| `project_name`    | —                              | Préfixe des ressources                              |
+| `region`          | —                              | Région OpenStack                                    |
+| `subnet_cidr`     | `10.0.1.0/24`                  | CIDR du subnet                                      |
+| `dns_nameservers` | `["213.186.33.99", "8.8.8.8"]` | DNS                                                 |
+| `ext_net_id`      | —                              | ID du réseau Ext-Net (requis si `enable_router`)    |
+| `admin_cidr`      | —                              | CIDR autorisé SSH (requis si `enable_secgroup`)     |
+| `ssh_public_key`  | —                              | Clé publique SSH (requis si `enable_keypair`)       |
+| `enable_router`   | `true`                         | Crée le routeur + interface (cas VM publique)       |
+| `enable_secgroup` | `true`                         | Crée le security group + règles SSH/HTTP/HTTPS/ICMP |
+| `enable_keypair`  | `true`                         | Crée la keypair SSH (inutile pour MKS)              |
 
-**Outputs** : `network_id`, `subnet_id`, `secgroup_id`, `keypair_name`, `router_id`.
+**Outputs** : `network_id`, `subnet_id` (toujours présents) ; `secgroup_id`, `keypair_name`, `router_id` (présents seulement si flag correspondant activé, sinon `null`).
+
+**Cas d'usage** :
+
+- **VM publique** (sandbox-sbg5) : tous les flags à `true` (défaut).
+- **MKS** (mks-sandbox-par) : tous les flags à `false` — MKS gère son propre routage et son filtrage. On ne garde que le réseau privé + subnet, requis en région 3AZ.
+
+Cette mécanique est documentée plus en détail dans [ADR 0003](docs/adr/0003-feature-flags-module-network.md).
 
 ### 6.2 Module `compute`
 
@@ -278,25 +288,28 @@ Ressources : port réseau, IP flottante, instance VM, association IP↔VM.
 
 Ressources : cluster MKS, node pool, IP restrictions (optionnel).
 
-| Variable                                    | Défaut                        | Description                                           |
-| ------------------------------------------- | ----------------------------- | ----------------------------------------------------- |
-| `service_name`                              | —                             | ID du projet Public Cloud (tenant)                    |
-| `cluster_name`                              | —                             | Nom du cluster                                        |
-| `region`                                    | —                             | Région MKS (ex: `EU-WEST-PAR`, `SBG5`)                |
-| `kube_version`                              | `null`                        | Version K8s (null = latest stable MKS)                |
-| `update_policy`                             | `MINIMAL_DOWNTIME`            | `ALWAYS_UPDATE` / `MINIMAL_DOWNTIME` / `NEVER_UPDATE` |
-| `az_count`                                  | `2`                           | 1/2/3 — nombre d'AZ logiques                          |
-| `availability_zones`                        | `["eu-west-par-a", …-b, …-c]` | Noms des AZ                                           |
-| `node_flavor`                               | `b2-7`                        | Flavor workers                                        |
-| `nodes_per_pool`                            | `1`                           | Nodes par AZ logique                                  |
-| `autoscale`                                 | `false`                       | Active autoscaling                                    |
-| `min_nodes_per_pool` / `max_nodes_per_pool` | `1` / `3`                     | Bornes autoscaling                                    |
-| `api_allowed_cidrs`                         | `[]`                          | Vide = 0.0.0.0/0                                      |
-| `private_network_id`                        | `null`                        | Null = cluster public                                 |
+| Variable                                    | Défaut                        | Description                                                                |
+| ------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------- |
+| `service_name`                              | —                             | ID du projet Public Cloud (tenant)                                         |
+| `cluster_name`                              | —                             | Nom du cluster                                                             |
+| `region`                                    | —                             | Région MKS (ex: `EU-WEST-PAR`, `SBG5`)                                     |
+| `kube_version`                              | `null`                        | Version K8s (null = latest stable MKS)                                     |
+| `update_policy`                             | `MINIMAL_DOWNTIME`            | `ALWAYS_UPDATE` / `MINIMAL_DOWNTIME` / `NEVER_UPDATE`                      |
+| `az_count`                                  | `2`                           | 1/2/3 — nombre d'AZ logiques                                               |
+| `availability_zones`                        | `["eu-west-par-a", …-b, …-c]` | Noms des AZ                                                                |
+| `node_flavor`                               | `b2-7`                        | Flavor workers                                                             |
+| `nodes_per_pool`                            | `1`                           | Nodes par AZ logique                                                       |
+| `autoscale`                                 | `false`                       | Active autoscaling                                                         |
+| `min_nodes_per_pool` / `max_nodes_per_pool` | `1` / `3`                     | Bornes autoscaling                                                         |
+| `api_allowed_cidrs`                         | `[]`                          | Vide = 0.0.0.0/0                                                           |
+| `private_network_id`                        | `null`                        | ID du réseau privé OVH (**obligatoire** en région 3AZ comme `EU-WEST-PAR`) |
+| `nodes_subnet_id`                           | `null`                        | ID du subnet OpenStack des nodes (**obligatoire** en région 3AZ)           |
 
 **Outputs** : `cluster_id`, `cluster_name`, `endpoint`, `version`, `kubeconfig` (sensitive), `nodepool`, `az_count`, `total_nodes`.
 
-Voir [section 11](#11-module-mks-kubernetes-managé) pour les détails techniques.
+> **Région 3AZ (`EU-WEST-PAR`)** : `private_network_id` ET `nodes_subnet_id` sont **obligatoires**. L'env `mks-sandbox-par` les fournit en appelant le module `network` (en mode minimal, voir § 6.1) et en passant `module.network.network_id` / `module.network.subnet_id` au module `mks`. En mono-AZ (SBG5), ces deux paramètres restent optionnels.
+
+Voir [section 11](#11-module-mks-kubernetes-managé) pour les détails techniques et [ADR 0006](docs/adr/0006-choix-region-paris-3az-vs-sbg-mono-az.md) pour le trade-off mono-AZ vs 3AZ.
 
 ### 6.4 Module `dbaas`
 
