@@ -69,6 +69,51 @@ resolve_kubeconfig() {
   esac
 }
 
+# OVH MKS auto-crée un router Neutron k8s-cluster-<cluster_id> qui n'est pas
+# supprimé avec le cluster : ses ports router_centralized_snat bloquent la
+# suppression du subnet pendant 10 min. On le nettoie avant tf destroy.
+cleanup_mks_residual_router() {
+  local dir="$1"
+  command -v openstack >/dev/null 2>&1 || {
+    warn "openstack CLI absent — skip nettoyage router MKS résiduel"
+    return 0
+  }
+  command -v jq >/dev/null 2>&1 || {
+    warn "jq absent — skip nettoyage router MKS résiduel"
+    return 0
+  }
+
+  local cluster_id
+  cluster_id=$(tf_output_raw "$dir" "cluster_id")
+  if [ -z "$cluster_id" ] || [ "$cluster_id" = "null" ]; then
+    return 0
+  fi
+
+  local router_name="k8s-cluster-$cluster_id"
+  local router_id
+  router_id=$(openstack router show "$router_name" -f value -c id 2>/dev/null || echo "")
+  if [ -z "$router_id" ]; then
+    return 0
+  fi
+
+  info "Router MKS résiduel détecté : $router_name ($router_id) — nettoyage"
+
+  local subnets
+  subnets=$(openstack router show "$router_id" -f json 2>/dev/null | jq -r '.interfaces_info[]?.subnet_id' | sort -u)
+  local subnet_id
+  for subnet_id in $subnets; do
+    info "  détachement subnet $subnet_id"
+    openstack router remove subnet "$router_id" "$subnet_id" 2>&1 | sed 's/^/    /' || warn "Échec remove subnet $subnet_id"
+  done
+
+  info "  suppression router $router_id"
+  if openstack router delete "$router_id" 2>&1 | sed 's/^/    /'; then
+    ok "Router MKS résiduel nettoyé"
+  else
+    warn "Échec delete router — le destroy TF pourrait encore échouer"
+  fi
+}
+
 # Détecte la région cible d'un env (priorité : terraform.tfvars > nom de l'env)
 detect_region() {
   local env="$1"
@@ -242,6 +287,9 @@ cmd_destroy() {
       info "Aucun subnet à détacher"
     fi
   fi
+
+  # Nettoyage router MKS résiduel (no-op si pas de cluster MKS dans l'env)
+  cleanup_mks_residual_router "$dir"
 
   info "Destruction de l'environnement ${BOLD}$env${NC}"
 
@@ -535,7 +583,24 @@ cmd_destroy_demo() {
   local demo_dir="$EXAMPLES_DIR/k8s-multi-az-demo"
 
   info "Suppression de la démo sur ${BOLD}$env${NC}"
+
+  # Détecte si un service LoadBalancer est présent : si oui, Octavia aura
+  # besoin de 1-3 min pour libérer son port côté Neutron (sinon le TF
+  # destroy qui suit tape sur un port actif et timeout sur le subnet)
+  local has_lb="false"
+  if KUBECONFIG="$kubeconfig" kubectl get svc zone-demo -o jsonpath='{.spec.type}' 2>/dev/null | grep -q LoadBalancer; then
+    has_lb="true"
+  fi
+
   KUBECONFIG="$kubeconfig" kubectl delete -f "$demo_dir/" --ignore-not-found
+
+  if [ "$has_lb" = "true" ]; then
+    info "Attente suppression du Service côté k8s (timeout 2m)..."
+    KUBECONFIG="$kubeconfig" kubectl wait --for=delete svc/zone-demo --timeout=2m 2>/dev/null || true
+    info "Marge 60s pour que Neutron libère le port Octavia côté OVH..."
+    sleep 60
+  fi
+
   ok "Démo supprimée"
 }
 

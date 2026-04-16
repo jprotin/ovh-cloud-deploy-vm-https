@@ -121,7 +121,7 @@ Ou via `./infra.sh doctor` pour un check rapide sans installation.
 
 ```bash
 ./infra.sh full-deploy   -e <env> [--with-demo]   # apply → wait-nodes → (option démo) → verify
-./infra.sh full-destroy  -e <env>                 # destroy-demo (si présent) → terraform destroy
+./infra.sh full-destroy  -e <env>                 # destroy-demo (+ wait Octavia) → cleanup router MKS résiduel → destroy
 ```
 
 ### Diagnostic
