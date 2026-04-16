@@ -263,9 +263,9 @@ Ressources : réseau privé + subnet (toujours créés) ; routeur, security grou
 | `region`          | —                              | Région OpenStack                                    |
 | `subnet_cidr`     | `10.0.1.0/24`                  | CIDR du subnet                                      |
 | `dns_nameservers` | `["213.186.33.99", "8.8.8.8"]` | DNS                                                 |
-| `ext_net_id`      | —                              | ID du réseau Ext-Net (requis si `enable_router`)    |
-| `admin_cidr`      | —                              | CIDR autorisé SSH (requis si `enable_secgroup`)     |
-| `ssh_public_key`  | —                              | Clé publique SSH (requis si `enable_keypair`)       |
+| `ext_net_id`      | `null`                         | ID du réseau Ext-Net (requis si `enable_router`)    |
+| `admin_cidr`      | `null`                         | CIDR autorisé SSH (requis si `enable_secgroup`)     |
+| `ssh_public_key`  | `null`                         | Clé publique SSH (requis si `enable_keypair`)       |
 | `enable_router`   | `true`                         | Crée le routeur + interface (cas VM publique)       |
 | `enable_secgroup` | `true`                         | Crée le security group + règles SSH/HTTP/HTTPS/ICMP |
 | `enable_keypair`  | `true`                         | Crée la keypair SSH (inutile pour MKS)              |
@@ -299,22 +299,21 @@ Ressources : port réseau, IP flottante, instance VM, association IP↔VM.
 
 Ressources : cluster MKS, node pool, IP restrictions (optionnel).
 
-| Variable                                    | Défaut                        | Description                                                                |
-| ------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------- |
-| `service_name`                              | —                             | ID du projet Public Cloud (tenant)                                         |
-| `cluster_name`                              | —                             | Nom du cluster                                                             |
-| `region`                                    | —                             | Région MKS (ex: `EU-WEST-PAR`, `SBG5`)                                     |
-| `kube_version`                              | `null`                        | Version K8s (null = latest stable MKS)                                     |
-| `update_policy`                             | `MINIMAL_DOWNTIME`            | `ALWAYS_UPDATE` / `MINIMAL_DOWNTIME` / `NEVER_UPDATE`                      |
-| `az_count`                                  | `2`                           | 1/2/3 — nombre d'AZ logiques                                               |
-| `availability_zones`                        | `["eu-west-par-a", …-b, …-c]` | Noms des AZ                                                                |
-| `node_flavor`                               | `b2-7`                        | Flavor workers                                                             |
-| `nodes_per_pool`                            | `1`                           | Nodes par AZ logique                                                       |
-| `autoscale`                                 | `false`                       | Active autoscaling                                                         |
-| `min_nodes_per_pool` / `max_nodes_per_pool` | `1` / `3`                     | Bornes autoscaling                                                         |
-| `api_allowed_cidrs`                         | `[]`                          | Vide = 0.0.0.0/0                                                           |
-| `private_network_id`                        | `null`                        | ID du réseau privé OVH (**obligatoire** en région 3AZ comme `EU-WEST-PAR`) |
-| `nodes_subnet_id`                           | `null`                        | ID du subnet OpenStack des nodes (**obligatoire** en région 3AZ)           |
+| Variable                                    | Défaut             | Description                                                                |
+| ------------------------------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `service_name`                              | —                  | ID du projet Public Cloud (tenant)                                         |
+| `cluster_name`                              | —                  | Nom du cluster                                                             |
+| `region`                                    | —                  | Région MKS (ex: `EU-WEST-PAR`, `SBG5`)                                     |
+| `kube_version`                              | `null`             | Version K8s (null = latest stable MKS)                                     |
+| `update_policy`                             | `MINIMAL_DOWNTIME` | `ALWAYS_UPDATE` / `MINIMAL_DOWNTIME` / `NEVER_UPDATE`                      |
+| `az_count`                                  | `2`                | 1/2/3 — nombre d'AZ logiques (validation 1/2/3)                            |
+| `node_flavor`                               | `b2-7`             | Flavor workers                                                             |
+| `nodes_per_pool`                            | `1`                | Nodes par AZ logique                                                       |
+| `autoscale`                                 | `false`            | Active autoscaling                                                         |
+| `min_nodes_per_pool` / `max_nodes_per_pool` | `1` / `3`          | Bornes autoscaling                                                         |
+| `api_allowed_cidrs`                         | `[]`               | Vide = 0.0.0.0/0                                                           |
+| `private_network_id`                        | `null`             | ID du réseau privé OVH (**obligatoire** en région 3AZ comme `EU-WEST-PAR`) |
+| `nodes_subnet_id`                           | `null`             | ID du subnet OpenStack des nodes (**obligatoire** en région 3AZ)           |
 
 **Outputs** : `cluster_id`, `cluster_name`, `endpoint`, `version`, `kubeconfig` (sensitive), `nodepool`, `az_count`, `total_nodes`.
 
@@ -415,7 +414,7 @@ C'est un **ID hex de 32 caractères**, pas le nom friendly du projet. L'utilisat
 
 Cette valeur est requise pour **MKS** (variable `ovh_service_name`).
 
-### 8.5 openrc par région OVHcloud
+### 8.4 openrc par région OVHcloud
 
 Sur OVHcloud Public Cloud, **chaque région a ses propres credentials OpenStack**. Le projet attend un fichier `openrc_<REGION>.sh` par région utilisée :
 
@@ -429,9 +428,11 @@ Ces fichiers contiennent un mot de passe en clair, ils sont **automatiquement gi
 
 `infra.sh` source le bon fichier automatiquement avant chaque opération Terraform — pas besoin de `source openrc.sh` à la main. Si le fichier est absent : warning + continue (l'utilisateur peut avoir ses propres `OS_*` exportées dans son shell).
 
+> **Cohérence env ↔ openrc** : la détection région d'`infra.sh` se base d'abord sur la variable `region` du `terraform.tfvars`, sinon sur le nom de l'env (`*par*` → PAR, `*sbg*` → SBG). Si tu utilises un env nommé `sandbox-par` mais que tes ressources OpenStack sont en GRA, le sourcing automatique enverra le mauvais openrc — privilégie un nom d'env cohérent avec la région cible (`sandbox-gra` par exemple).
+
 Détails dans [ADR 0004](docs/adr/0004-strategie-openrc-par-region.md).
 
-### 8.4 terraform.tfvars (exemple complet pour sandbox-par)
+### 8.5 terraform.tfvars (exemple complet pour sandbox-par)
 
 ```hcl
 # OVH API
@@ -445,12 +446,12 @@ enable_vm    = true
 enable_mks   = true
 enable_dbaas = false
 
-# VM (si enable_vm=true)
+# VM (si enable_vm=true) — credentials OpenStack en région PAR
 os_tenant_id   = "..."
 os_tenant_name = "..."
 os_username    = "user-..."
 os_password    = "..."
-os_region      = "GRA11"
+os_region      = "EU-WEST-PAR"
 ssh_public_key = "ssh-ed25519 AAAA..."
 admin_cidr     = "XX.XX.XX.XX/32"
 
@@ -523,7 +524,7 @@ mks_nodes_per_pool = 1
 
 - **Sourcing openrc automatique** : avant chaque opération Terraform (`init`, `plan`, `deploy`, `destroy`), `infra.sh` détecte la région cible (priorité : `terraform.tfvars` > nom de l'env, ex `*par*` → PAR, `*sbg*` → SBG) et source le bon `openrc_<REGION>.sh`. Plus besoin de le faire à la main. Si le fichier est absent, warning + continue (l'utilisateur peut avoir ses propres `OS_*` exportées). Voir [ADR 0004](docs/adr/0004-strategie-openrc-par-region.md).
 - **Auto-init** : `deploy` lance `terraform init` si `.terraform/` absent.
-- **Détachement routeur** : `destroy` détecte la présence d'une VM (via output `vm_name`) et détache l'interface routeur OVH avant le `terraform destroy` (contournement d'une limitation OVHcloud).
+- **Détachement routeur** : `destroy` détecte la présence d'une VM (via output `vm_name`) et détache l'interface routeur OVH avant le `terraform destroy` (contournement d'une limitation OVHcloud). Cette étape utilise le client `openstack` ; les credentials sont déjà disponibles grâce au sourcing automatique fait en début de `cmd_destroy`.
 - **Outputs intelligents** : les commandes `ssh`/`kubeconfig`/`wait-nodes` détectent les outputs `null` et affichent un message d'erreur explicite si le workload n'est pas activé.
 - **Wait LB sur deploy-demo** : après `kubectl apply`, `infra.sh` attend le `rollout status` (timeout 2min), boucle sur l'IP publique du LoadBalancer (timeout 3min, polling 5s) et lance `curl -sfI` sur l'IP obtenue pour confirmer le succès.
 - **Démo K8s** : `deploy-demo` utilise automatiquement le `kubeconfig.yaml` généré par Terraform.
@@ -636,16 +637,16 @@ kubectl get pods --all-namespaces
 En région **3AZ (Paris `EU-WEST-PAR`)** :
 
 - Le **control plane** est automatiquement HA sur les 3 AZ
-- Les **workers** sont distribués par OVH sur les AZ disponibles
-- `anti_affinity=true` garantit des hyperviseurs différents (et donc des AZ différentes quand possible)
+- Les **workers** sont distribués par OVH sur les AZ disponibles (anti-affinité gérée implicitement côté provider OVH, sans variable Terraform exposée)
+- `az_count` dimensionne le node pool (1/2/3) — la répartition physique sur les hyperviseurs/AZ relève du scheduler OVHcloud
 
-| `az_count` | `anti_affinity` |     Total nodes      | Usage                           |
-| :--------: | :-------------: | :------------------: | ------------------------------- |
-|    `1`     |     `false`     |   `nodes_per_pool`   | Mono-AZ, cluster petit/dev      |
-|    `2`     |     `true`      | `2 × nodes_per_pool` | Bi-AZ (défaut) — **recommandé** |
-|    `3`     |     `true`      | `3 × nodes_per_pool` | Tri-AZ, HA max                  |
+| `az_count` |     Total nodes      | Usage                           |
+| :--------: | :------------------: | ------------------------------- |
+|    `1`     |   `nodes_per_pool`   | Mono-AZ, cluster petit/dev      |
+|    `2`     | `2 × nodes_per_pool` | Bi-AZ (défaut) — **recommandé** |
+|    `3`     | `3 × nodes_per_pool` | Tri-AZ, HA max                  |
 
-> **Note** : `az_count` est un contrôle **logique** côté Terraform qui dimensionne le pool. La répartition physique sur les AZ est gérée par le scheduler OVHcloud via `anti_affinity`.
+> **Note** : `az_count` est un contrôle **logique** Terraform qui pilote le sizing du pool. Aucune variable n'expose les noms d'AZ ni l'anti-affinité au niveau du module — ces aspects sont gérés en interne par OVH MKS (en région 3AZ, OVH garantit la distribution sur des hyperviseurs distincts).
 
 ### 11.3 Kubeconfig local
 
