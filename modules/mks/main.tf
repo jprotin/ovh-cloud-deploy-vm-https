@@ -17,8 +17,11 @@ resource "ovh_cloud_project_kube" "this" {
   version       = var.kube_version
   update_policy = var.update_policy
 
-  # Intégration réseau privé (optionnelle)
+  # Intégration réseau privé :
+  # - optionnelle en mono-AZ (SBG5)
+  # - OBLIGATOIRE en région 3AZ (EU-WEST-PAR) : private_network_id + nodes_subnet_id requis
   private_network_id = var.private_network_id
+  nodes_subnet_id    = var.nodes_subnet_id
 }
 
 # -------------------------------------------------------

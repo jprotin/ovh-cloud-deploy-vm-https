@@ -79,7 +79,13 @@ variable "api_allowed_cidrs" {
 }
 
 variable "private_network_id" {
-  description = "ID du réseau privé OpenStack (null = cluster public)"
+  description = "ID du réseau privé OVH (obligatoire en région 3AZ comme EU-WEST-PAR)"
+  type        = string
+  default     = null
+}
+
+variable "nodes_subnet_id" {
+  description = "ID du subnet OpenStack où seront placés les nodes (obligatoire en région 3AZ comme EU-WEST-PAR)"
   type        = string
   default     = null
 }
